@@ -165,6 +165,46 @@ class Python(unittest.TestCase):
         ))
         self.assertIs(risk.flagged([], PackageDiff(), diff), True)
 
+    def test_uv_source_changed(self):
+        new = pyproject("pyarrow>=14") + '\n[tool.uv.sources]\npyarrow = { git = "https://x/pyarrow" }\n'
+        diff = deps.declared_python_diff({PYPROJECT: pyproject("pyarrow>=14")}, {PYPROJECT: new})
+        self.assertEqual(diff, PackageDiff(added=(("pyarrow", "", "git=https://x/pyarrow", PYPROJECT),)))
+        self.assertIs(risk.flagged([], PackageDiff(), diff), True)
+
+    def test_uv_index_added(self):
+        new = pyproject("pyarrow>=14") + '\n[[tool.uv.index]]\nurl = "https://evil/simple"\n'
+        diff = deps.declared_python_diff({PYPROJECT: pyproject("pyarrow>=14")}, {PYPROJECT: new})
+        self.assertEqual(diff, PackageDiff(added=(("uv:index", "", "url=https://evil/simple", PYPROJECT),)))
+
+    def test_uv_index_keys_and_credentials(self):
+        uv = ('[tool.uv]\nindex-url = "https://tok@pypi.example/simple"\n'
+              'extra-index-url = ["https://a/simple", "https://b/simple"]\nfind-links = ["https://c/wheels"]\n\n'
+              '[tool.uv.sources]\nTyping_Extensions = [{ index = "a", marker = "sys_platform == \'linux\'" }, '
+              '{ path = "vendor/te", editable = true }]\n')
+        diff = deps.declared_python_diff({}, {PYPROJECT: uv})
+        self.assertEqual(diff.added, (
+            ("typing-extensions", "", "index=a, marker=sys_platform == 'linux' | editable=true, path=vendor/te", PYPROJECT),
+            ("uv:extra-index-url", "", "https://a/simple | https://b/simple", PYPROJECT),
+            ("uv:find-links", "", "https://c/wheels", PYPROJECT),
+            ("uv:index-url", "", "https://<redacted>@pypi.example/simple", PYPROJECT),
+        ))
+
+    def test_uv_source_url_changed_and_removed(self):
+        old = '[tool.uv.sources]\na = { git = "https://x/a" }\nb = { path = "b" }\n'
+        new = '[tool.uv.sources]\na = { git = "https://evil/a" }\n'
+        self.assertEqual(deps.declared_python_diff({PYPROJECT: old}, {PYPROJECT: new}), PackageDiff(
+            removed=(("b", "path=b", "", PYPROJECT),),
+            changed=(("a", "git=https://x/a", "git=https://evil/a", PYPROJECT),),
+        ))
+
+    def test_an_untouched_uv_table_is_no_change(self):
+        text = pyproject("pyarrow>=14") + '\n[tool.uv.sources]\npyarrow = { git = "https://x/pyarrow" }\n'
+        self.assertEqual(deps.declared_python_diff({PYPROJECT: text}, {PYPROJECT: text}), PackageDiff())
+
+    def test_a_malformed_uv_table_is_a_finding(self):
+        diff = deps.declared_python_diff({}, {PYPROJECT: '[tool]\nuv = "x"\n'})
+        self.assertEqual(diff.errors, (f"{PYPROJECT} after the change [tool.uv] is not a table",))
+
     def test_a_malformed_pyproject_is_a_finding(self):
         diff = deps.declared_python_diff({}, {PYPROJECT: "[project]\ndependencies = \"pyarrow\"\n"})
         self.assertEqual(diff.errors, (f"{PYPROJECT} after the change [project] dependencies is not a list of strings",))

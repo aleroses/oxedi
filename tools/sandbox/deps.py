@@ -21,6 +21,8 @@ from source import Change, git_bytes, git_text, redacted
 NO_SOURCE = "local"
 # A PEP 508 name, then nothing or what may follow a name: extras, a version, markers or `@ url`.
 REQUIREMENT = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*((?:[\[(<>=!~;@].*)?)")
+# The `[tool.uv]` keys that name where packages are downloaded from.
+UV_INDEX_KEYS = ("index", "extra-index-url", "index-url", "find-links")
 
 # (name, old version or spec, new version or spec, source): an added package has an empty old
 # side, a removed one an empty new side. The source is the registry or git URL for Cargo.lock
@@ -119,7 +121,12 @@ def requirement(line: str) -> tuple[str, str]:
     match = REQUIREMENT.fullmatch(line)
     if match is None:
         return line.strip(), ""
-    return re.sub(r"[-_.]+", "-", match[1]).lower(), match[2].strip()
+    return normalized(match[1]), match[2].strip()
+
+
+def normalized(name: str) -> str:
+    """A package name as Python packaging compares it: lower case, `-`, `_` and `.` runs as `-`."""
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def requirements_lines(text: str) -> Iterator[str]:
@@ -185,6 +192,32 @@ def declared(path: str, text: str, where: str) -> dict[str, str]:
     return {name: " | ".join(sorted(found)) for name, found in specs.items()}
 
 
+def rendered(value: object) -> str:
+    """A TOML value on one line: a table as its `k=v` pairs sorted by key, an array as its items
+    joined by ` | `."""
+    if isinstance(value, dict):
+        return ", ".join(f"{key}={rendered(value[key])}" for key in sorted(value))
+    if isinstance(value, list):
+        return " | ".join(rendered(item) for item in value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def uv_declared(path: str, text: str, where: str) -> dict[str, str]:
+    """Where a pyproject.toml tells uv to take packages from: per `[tool.uv.sources]` key its table,
+    and per `[tool.uv]` index key, named `uv:<key>`, its value, each on one line with every URL's
+    credentials redacted. A requirements file says this in its option lines instead."""
+    if PurePosixPath(path).name != "pyproject.toml":
+        return {}
+    tools = table(toml(text, where).get("tool", {}), f"{where} [tool]")
+    uv = table(tools.get("uv", {}), f"{where} [tool.uv]")
+    sources = table(uv.get("sources", {}), f"{where} [tool.uv.sources]")
+    found = {normalized(name): rendered(spec) for name, spec in sources.items()}
+    found |= {f"uv:{key}": rendered(uv[key]) for key in UV_INDEX_KEYS if key in uv}
+    return {name: redacted(spec) for name, spec in found.items()}
+
+
 def compare_specs(path: str, old: dict[str, str], new: dict[str, str]) -> PackageDiff:
     return PackageDiff(
         added=tuple(sorted((n, "", new[n], path) for n in new.keys() - old.keys())),
@@ -194,19 +227,21 @@ def compare_specs(path: str, old: dict[str, str], new: dict[str, str]) -> Packag
 
 
 def file_diff(path: str, old: str, new: str) -> PackageDiff:
+    """The packages a file declares and where uv takes them from, compared apart, so a source
+    for a declared package shows as its own entry."""
     try:
-        before = declared(path, old, f"{path} before the change")
-        after = declared(path, new, f"{path} after the change")
+        sides = [(read(path, old, f"{path} before the change"), read(path, new, f"{path} after the change"))
+                 for read in (declared, uv_declared)]
     except ValueError as error:
         return PackageDiff(errors=(str(error),))
-    return compare_specs(path, before, after)
+    return total(compare_specs(path, before, after) for before, after in sides)
 
 
 def declared_python_diff(old_files: dict[str, str], new_files: dict[str, str]) -> PackageDiff:
     """The Python packages the dependency files declare before and after (path -> text; a file
     absent on one side declares nothing there): `pyproject.toml` from `[project] dependencies`,
-    `[project.optional-dependencies]`, `[dependency-groups]` and `[build-system] requires`,
-    `requirements*.txt` line by line."""
+    `[project.optional-dependencies]`, `[dependency-groups]` and `[build-system] requires`, with
+    uv's sources and indexes from `[tool.uv]`; `requirements*.txt` line by line."""
     paths = old_files.keys() | new_files.keys()
     return total(file_diff(path, old_files.get(path, ""), new_files.get(path, "")) for path in paths)
 
