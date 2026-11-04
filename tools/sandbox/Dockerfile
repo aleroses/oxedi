@@ -1,7 +1,8 @@
 # The image `make sandbox` builds and tests in. Every input is pinned: base image and uv by digest,
 # rustup-init and cargo-deny by version and SHA-256, pip-audit by version and hashes, the
-# toolchain and both CPythons by full version. The build context is this folder only. The tag is
-# oxedi-sandbox:<first 12 hex of sha256 of this file followed by pip-audit.txt>.
+# toolchain (from rust-toolchain.toml) and both CPythons by full version. The build context is this
+# folder only. The tag is oxedi-sandbox:<first 12 hex of sha256 of this file, pip-audit.txt and
+# rust-toolchain.toml>.
 
 # uv 0.13.5, one static binary.
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
@@ -9,7 +10,8 @@ FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf56
 # Index digest of ubuntu:24.04 (amd64 and arm64).
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 ARG TARGETARCH
-ARG RUST_VERSION=1.99.0
+# No default: `make sandbox-image` passes the channel of rust-toolchain.toml.
+ARG RUST_VERSION
 ARG RUSTUP_VERSION=1.29.2
 ARG RUSTUP_INIT_SHA256_AMD64=5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4
 ARG RUSTUP_INIT_SHA256_ARM64=a9c168dbea81a84671c6b7a5c1795cb0eb699020110d107ddfca427bd797e697

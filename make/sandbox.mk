@@ -8,9 +8,10 @@ SANDBOX_DIR   := tools/sandbox
 # Every Python this file starts runs isolated (-I): a module a run left in the checkout, such as a
 # root hashlib.py, or a PYTHON* variable of the shell is never loaded.
 SANDBOX_PY    := $(PYTHON_BIN) -I
-# The tag is the first 12 hex digits of the SHA-256 of the Dockerfile followed by pip-audit.txt, the
-# two files the build reads (the Dockerfile COPYs pip-audit.txt), so a change to either is a new tag.
-SANDBOX_HASH   = $(shell $(SANDBOX_PY) -c "import hashlib, pathlib; print(hashlib.sha256(b''.join(pathlib.Path('$(SANDBOX_DIR)/' + n).read_bytes() for n in ('Dockerfile', 'pip-audit.txt'))).hexdigest()[:12])")
+# The tag is the first 12 hex digits of the SHA-256 of the Dockerfile, pip-audit.txt and
+# rust-toolchain.toml, the three files the build reads (the Dockerfile COPYs pip-audit.txt and takes
+# the Rust version from the last as a build argument), so a change to any of them is a new tag.
+SANDBOX_HASH   = $(shell $(SANDBOX_PY) -c "import hashlib, pathlib; print(hashlib.sha256(b''.join(pathlib.Path(n).read_bytes() for n in ('$(SANDBOX_DIR)/Dockerfile', '$(SANDBOX_DIR)/pip-audit.txt', 'rust-toolchain.toml'))).hexdigest()[:12])")
 SANDBOX_IMAGE  = oxedi-sandbox:$(SANDBOX_HASH)
 # The viewer image is built on the base one: its tag follows the base tag, its Dockerfile, playwright.txt,
 # install_tools.sh and viewer_image.py (that file derives the tag and the wasm and Playwright pins).
@@ -79,10 +80,11 @@ test -n "$(SANDBOX_RUN_IMAGE)" || exit 1; \
 endef
 
 # Two builds: the second reuses every layer and only adds the apt set, read from the first, as a label.
-sandbox-image: ## build the sandbox image from tools/sandbox (tag oxedi-sandbox:<hash of the Dockerfile and pip-audit.txt>)
-	docker build --tag $(SANDBOX_IMAGE) $(SANDBOX_DIR)
-	apt=$$(docker run --rm --pull never --network none --read-only --cap-drop ALL --user 65534:65534 --security-opt no-new-privileges $(SANDBOX_IMAGE) cat /usr/share/oxedi-sandbox.manifest | tr '\t\n' '= ' | sed 's/ $$//') && \
-	  docker build --tag $(SANDBOX_IMAGE) --label "oxedi.sandbox.apt=$$apt" $(SANDBOX_DIR)
+sandbox-image: ## build the sandbox image from tools/sandbox (tag oxedi-sandbox:<hash of the Dockerfile, pip-audit.txt and rust-toolchain.toml>)
+	rust=$$($(SANDBOX_PY) $(SANDBOX_DIR)/rust_version.py --root $(CURDIR)) && \
+	  docker build --build-arg RUST_VERSION=$$rust --tag $(SANDBOX_IMAGE) $(SANDBOX_DIR) && \
+	  apt=$$(docker run --rm --pull never --network none --read-only --cap-drop ALL --user 65534:65534 --security-opt no-new-privileges $(SANDBOX_IMAGE) cat /usr/share/oxedi-sandbox.manifest | tr '\t\n' '= ' | sed 's/ $$//') && \
+	  docker build --build-arg RUST_VERSION=$$rust --tag $(SANDBOX_IMAGE) --label "oxedi.sandbox.apt=$$apt" $(SANDBOX_DIR)
 	@echo "sandbox-image: $(SANDBOX_IMAGE), $$(docker image inspect --format '{{.Size}}' $(SANDBOX_IMAGE) | awk '{ printf "%.0f MB", $$1 / 1000000 }')"
 
 # Two builds, like sandbox-image. The base image is built first when missing; the wasm tools are

@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -87,7 +88,7 @@ def git_init(root: Path) -> Path:
 # What `make sandbox` reads from this repository. The tests that go through make copy them into a
 # throwaway checkout, so the runner audits and scrubs that checkout, never this one.
 MAKE_FILES = (
-    "Makefile", "make", "tools/sandbox", "Cargo.toml", "crates/oxedi_duckdb/Cargo.toml",
+    "Makefile", "make", "tools/sandbox", "rust-toolchain.toml", "Cargo.toml", "crates/oxedi_duckdb/Cargo.toml",
     "crates/oxedi_wasm/scripts/install_tools.sh", "docs/requirements.txt",
 )
 
@@ -802,8 +803,10 @@ WASM_PINS = viewer_image.wasm_pins(INSTALL_TOOLS)
 
 
 def base_tag() -> str:
-    """The base image tag make derives from this repository's sandbox Dockerfile and pip-audit.txt."""
-    inputs = b"".join((SCRIPT.parent / name).read_bytes() for name in ("Dockerfile", "pip-audit.txt"))
+    """The base image tag make derives from this repository's sandbox Dockerfile, pip-audit.txt and
+    rust-toolchain.toml."""
+    inputs = b"".join(path.read_bytes() for path in (
+        SCRIPT.parent / "Dockerfile", SCRIPT.parent / "pip-audit.txt", REPO / "rust-toolchain.toml"))
     return f"oxedi-sandbox:{hashlib.sha256(inputs).hexdigest()[:12]}"
 
 
@@ -1066,6 +1069,41 @@ class Images(World):
                 # No build or run: docker is only asked for its server's architecture.
                 self.assertEqual({c["argv"][0] for c in self.calls()}, {"version"})
                 (self.fake / "calls.jsonl").unlink(missing_ok=True)
+
+    def test_image_refuses_a_channel_that_is_not_exact(self):
+        checkout = make_repo_copy(self.tmp / "repo")
+        for channel in ("stable", "1.99", "nightly-2026-01-01"):
+            with self.subTest(channel=channel):
+                (checkout / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{channel}"\n')
+                result = self.make(checkout, "sandbox-image")
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stderr.splitlines()[0],
+                    f"sandbox-image: rust-toolchain.toml names no exact channel X.Y.Z (found '{channel}'); "
+                    "set channel to a version such as 1.99.0")
+                self.assertEqual([c for c in self.calls() if c["argv"][0] == "build"], [])
+
+    def test_image_builds_with_the_channel_of_the_file(self):
+        checkout = make_repo_copy(self.tmp / "repo")
+        result = self.make(checkout, "sandbox-image")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        builds = [c["argv"] for c in self.calls() if c["argv"][0] == "build"]
+        self.assertEqual(len(builds), 2)
+        for argv in builds:
+            self.assertIn("RUST_VERSION=1.99.0", argv)
+
+    def test_base_tag_follows_rust_toolchain(self):
+        checkout = make_repo_copy(self.tmp / "repo")
+
+        def tag() -> str:
+            result = self.make(checkout, "sandbox", "CMD=true")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return re.search(r"image (oxedi-sandbox:\S+) \(base", result.stderr).group(1)
+
+        before = tag()
+        self.assertTrue(before.startswith("oxedi-sandbox:"))
+        (checkout / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.99.1"\n')
+        self.assertNotEqual(tag(), before)
 
     def test_kind_required_with_image(self):
         result = subprocess.run(

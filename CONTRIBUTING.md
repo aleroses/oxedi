@@ -408,8 +408,8 @@ or later, an assignment in an exported `MAKEFLAGS` cannot be told apart from the
 there only the origin check holds.
 
 **What the container is.** A pinned image (`tools/sandbox/Dockerfile`: Ubuntu 24.04, the Rust
-version CI gates with as `ARG RUST_VERSION`, CPython 3.11 and 3.13, uv, cargo-deny and pip-audit;
-no `git`), tagged with the hash of its Dockerfile and `pip-audit.txt`. The container runs as you, with a read-only root, no capabilities, no new
+version `rust-toolchain.toml` pins, CPython 3.11 and 3.13, uv, cargo-deny and pip-audit;
+no `git`), tagged with the hash of its Dockerfile, `pip-audit.txt` and `rust-toolchain.toml`. The container runs as you, with a read-only root, no capabilities, no new
 privileges, the default seccomp profile and limits on processes, memory and CPUs. It gets a fixed
 environment, never a variable of your shell, and no part of your home other than its own storage:
 no `~/.ssh`, `~/.pypirc`, `~/.config/gh`, Docker socket or the private samples.
@@ -587,9 +587,9 @@ whether each try worked. It reviews that branch with `CONFIRM=yes`, checks that 
 refused, that the canary, your home and your repository's refs are unchanged, and removes the
 clone. One line per check says ok or FAIL.
 
-**Bumping Rust.** When CI moves to a new Rust, change `ARG RUST_VERSION` in
-`tools/sandbox/Dockerfile`, run `make sandbox-image` (the new Dockerfile is a new tag), then run both
-gates: `make gates` on the host and `make sandbox CMD="make gates"`.
+**Bumping Rust.** `rust-toolchain.toml` is the one place the version is written (an exact
+`X.Y.Z`); CI and the image read it from there. Change its `channel`, run `make sandbox-image` (the
+file is an input of the tag, so the version is a new tag), then run both gates: `make gates` on the host and `make sandbox CMD="make gates"`.
 
 **Bumping the viewer tools.** Each pin lives in one place, and a bump is a new viewer tag:
 
