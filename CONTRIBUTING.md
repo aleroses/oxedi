@@ -529,7 +529,7 @@ build on the host.
 `oxedi-sandbox/`. Both refuse while a sandbox run or a sandbox container that uses the storage runs.
 
 **One run per checkout.** A run takes a lock in its checkout's storage before it calls docker and
-holds it until the audit is done; a second `make sandbox` or `make sandbox-pr` of the same
+holds it until the audit is done; a second `make sandbox` of the same
 checkout is refused with exit 2 and one line naming the first, `sandbox: another sandbox run of
 this checkout is in progress (pid 4242, since 2026-11-04T10:15:00+01:00); wait for it to end, or
 use another worktree`. A second `make sandbox-pr` of the same change and commit is refused the
