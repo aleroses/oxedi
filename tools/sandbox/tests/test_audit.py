@@ -148,33 +148,34 @@ class Audit(World):
 
     def test_a_path_host_tools_look_up_is_named_first(self):
         checkout = self.checkout("c", *TRACKED)
-        writes = "echo x > GNUmakefile && echo x > hashlib.py && mkdir -p crates/x && echo x > crates/x/conftest.py"
+        # The run cannot create a root GNUmakefile (it is held read-only), so an .envrc stands for it.
+        writes = "echo x > .envrc && echo x > hashlib.py && mkdir -p crates/x && echo x > crates/x/conftest.py"
         result = self.sandbox(checkout, FAKE_RUN_WRITES=writes)
         self.assertEqual(result.returncode, 3, result.stderr)
         warning = (
-            "sandbox: do not run make or any tool in this checkout until you remove GNUmakefile, crates/x/conftest.py, "
+            "sandbox: do not run make or any tool in this checkout until you remove .envrc, crates/x/conftest.py, "
             "hashlib.py: host tools load them by name (make reads GNUmakefile and makefile before Makefile)"
         )
         self.assertIn(warning + "\n", result.stderr)
         after_run = result.stderr[result.stderr.index("sandbox: run took"):].splitlines()
         self.assertEqual(after_run[1], warning)
-        self.assertIn("sandbox: the run left a new path GNUmakefile\n", result.stderr)
+        self.assertIn("sandbox: the run left a new path .envrc\n", result.stderr)
 
     def test_a_dirty_audit_blocks_the_next_start_until_the_paths_go(self):
         checkout = self.checkout("c", *TRACKED)
-        writes = "echo edit >> src/lib.rs && echo x > GNUmakefile && " + self.planted("marker")
+        writes = "echo edit >> src/lib.rs && echo x > .envrc && " + self.planted("marker")
         self.assertEqual(self.sandbox(checkout, FAKE_RUN_WRITES=writes).returncode, 3)
         runs = len(self.runs())
         result = self.sandbox(checkout)
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual(
             result.stderr,
-            "sandbox: refused: the last run left GNUmakefile, hashlib.py, src/lib.rs, still as it left them; "
+            "sandbox: refused: the last run left .envrc, hashlib.py, src/lib.rs, still as it left them; "
             "review them with git status and git diff, then remove or revert each one, or add it with git add to "
             "keep it (make sandbox-clean forgets the record, with the rest of this checkout's storage)\n",
         )
         self.assertEqual(len(self.runs()), runs)
-        (checkout / "GNUmakefile").unlink()
+        (checkout / ".envrc").unlink()
         (checkout / "hashlib.py").write_text("# reviewed by hand\n")
         subprocess.run(["git", "-C", str(checkout), "add", "src/lib.rs"], env=dict(os.environ, **GIT_ENV), check=True)
         result = self.sandbox(checkout)
@@ -203,7 +204,8 @@ class Audit(World):
         self.assertIn("Error 3", first.stderr)
         second = self.make(checkout, "sandbox", "CMD=true")
         self.assertEqual(second.returncode, 2, second.stderr)
-        self.assertIn("sandbox: refused: the last run left hashlib.py, still as it left them;", second.stderr)
+        # The host make stops at the guard, before the runner starts.
+        self.assertIn("*** make: a sandbox run left hashlib.py unreviewed;", second.stderr)
         self.assertFalse((self.tmp / "marker").exists())
 
     def test_a_module_in_the_checkout_never_shadows_the_runners(self):

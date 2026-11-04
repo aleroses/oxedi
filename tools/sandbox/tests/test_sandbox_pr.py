@@ -15,6 +15,7 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+import sandbox  # noqa: E402
 import sandbox_pr  # noqa: E402
 import source  # noqa: E402
 from test_sandbox import make_repo_copy  # noqa: E402
@@ -64,7 +65,7 @@ class Flow(unittest.TestCase):
         shim = self.bin / "docker"
         shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{HERE / "fake_docker.py"}" "$@"\n')
         shim.chmod(0o755)
-        handlers = {signum: signal.getsignal(signum) for signum in sandbox_pr.STOP_SIGNALS}
+        handlers = {signum: signal.getsignal(signum) for signum in sandbox.STOP_SIGNALS}
         self.addCleanup(lambda: [signal.signal(signum, handler) for signum, handler in handlers.items()])
         self.host = new_repo(self.tmp / "host")
         (self.host / "tools" / "sandbox").mkdir(parents=True)

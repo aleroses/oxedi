@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -87,7 +88,7 @@ def git_init(root: Path) -> Path:
 # What `make sandbox` reads from this repository. The tests that go through make copy them into a
 # throwaway checkout, so the runner audits and scrubs that checkout, never this one.
 MAKE_FILES = (
-    "Makefile", "make", "tools/sandbox", "Cargo.toml", "crates/oxedi_duckdb/Cargo.toml",
+    "Makefile", "make", "tools/sandbox", "rust-toolchain.toml", "Cargo.toml", "crates/oxedi_duckdb/Cargo.toml",
     "crates/oxedi_wasm/scripts/install_tools.sh", "docs/requirements.txt",
 )
 
@@ -280,6 +281,59 @@ class Arguments(World):
                     self.assertEqual((mount["type"], mount["src"]), ("bind", str(checkout / path)))
                     self.assertIn("readonly", mount)
             self.assertFalse([m for m in mounts(argv) if m.get("dst") == "/work/crates/m/src/lib.rs"])
+
+    def test_names_the_host_loads_read_only(self):
+        loaded = [
+            "crates/oxedi_py/tests/conftest.py", "crates/oxedi_py/pytest.ini", "setup.cfg", "tox.ini", "noxfile.py",
+            "crates/p/sitecustomize.py", "crates/p/usercustomize.py", "sub/.envrc",
+        ]
+        checkout = self.checkout("c", "Makefile", *loaded, "crates/oxedi_py/tests/test_x.py")
+        for phase in arguments.Phase:
+            argv = self.phase_args(phase, checkout)
+            for path in loaded:
+                with self.subTest(phase=phase, path=path):
+                    mount = mount_at(argv, f"/work/{path}")
+                    self.assertEqual((mount["type"], mount["src"]), ("bind", str(checkout / path)))
+                    self.assertIn("readonly", mount)
+            self.assertFalse([m for m in mounts(argv) if m.get("dst") == "/work/crates/oxedi_py/tests/test_x.py"])
+
+    def test_absent_root_names_held_in_the_run_only(self):
+        checkout = self.checkout("c", "Makefile")
+        stand_ins = self.own(checkout) / "stand-ins"
+        run = self.phase_args(arguments.Phase.RUN, checkout)
+        for name in ("GNUmakefile", "makefile", "conftest.py"):
+            with self.subTest(name=name):
+                mount = mount_at(run, f"/work/{name}")
+                self.assertEqual((mount["type"], mount["src"]), ("bind", str(stand_ins / name)))
+                self.assertIn("readonly", mount)
+        for phase in (arguments.Phase.FETCH, arguments.Phase.AUDIT):
+            with self.subTest(phase=phase):
+                destinations = {m.get("dst") for m in mounts(self.phase_args(phase, checkout))}
+                self.assertFalse(destinations & {"/work/GNUmakefile", "/work/makefile", "/work/conftest.py"})
+
+    def test_a_present_root_name_is_not_held(self):
+        checkout = self.checkout("c", "Makefile", "conftest.py", "GNUmakefile")
+        run = self.phase_args(arguments.Phase.RUN, checkout)
+        conftest = mount_at(run, "/work/conftest.py")
+        self.assertEqual((conftest["src"], "readonly" in conftest), (str(checkout / "conftest.py"), True))
+        self.assertEqual(mount_at(run, "/work/GNUmakefile")["src"], str(checkout / "GNUmakefile"))
+        self.assertEqual(mount_at(run, "/work/makefile")["src"], str(self.own(checkout) / "stand-ins" / "makefile"))
+
+    @unittest.skipUnless(shutil.which("make"), "needs make")
+    def test_make_in_the_run_reads_the_checkouts_makefile(self):
+        """Make reads the first of GNUmakefile, makefile and Makefile it finds; with the stand-ins
+        bound over the absent names it still reaches the target of the checkout's own makefile."""
+        for present in ("Makefile", "makefile"):
+            with self.subTest(present=present):
+                root = self.tmp / f"make-{present}"
+                root.mkdir()
+                (root / present).write_text(f"gates:\n\t@echo gates from {present}\n")
+                for name in ("GNUmakefile", "makefile"):
+                    if not (root / name).exists():
+                        (root / name).write_text(layout.STAND_INS[name])
+                done = subprocess.run(["make", "-s", "-C", str(root), "gates"], capture_output=True, text=True,
+                                      env={"PATH": os.environ["PATH"]})
+                self.assertEqual((done.returncode, done.stdout), (0, f"gates from {present}\n"), done.stderr)
 
     def test_ignored_paths_masked_outputs_not(self):
         outputs = [
@@ -500,6 +554,29 @@ class Runner(World):
         self.assertEqual(empty.read_bytes(), b"")
         self.assertEqual(empty.stat().st_mode & 0o777, 0o444 & ~current_umask())
 
+    def test_absent_root_names_held_during_the_run_then_removed(self):
+        checkout = self.checkout()
+        result = self.sandbox(checkout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("held in the run: GNUmakefile, makefile, conftest.py", result.stderr)
+        call = [c for c in self.runs() if "bash" in c["argv"]][0]
+        bodies = {"GNUmakefile": "-include makefile\n", "makefile": "-include Makefile\n", "conftest.py": ""}
+        for name, body in bodies.items():
+            with self.subTest(name=name):
+                stand_in = self.own(checkout) / "stand-ins" / name
+                self.assertEqual(mount_at(call["argv"], f"/work/{name}")["src"], str(stand_in))
+                self.assertIs(call["binds"][str(stand_in)]["mount_point"], True)
+                self.assertEqual(stand_in.read_text(), body)
+                self.assertFalse(os.path.lexists(checkout / name))
+        self.assertNotIn("the run left a new path", result.stderr)
+
+    def test_a_held_name_the_run_filled_is_left_for_the_audit(self):
+        checkout = self.checkout()
+        result = self.sandbox(checkout, FAKE_RUN_WRITES="chmod u+w GNUmakefile && echo 'all:' > GNUmakefile")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("sandbox: the run left a new path GNUmakefile", result.stderr)
+        self.assertEqual((checkout / "GNUmakefile").read_text(), "all:\n")
+
     def test_xdg_cache_home_holds_the_storage(self):
         checkout = self.checkout()
         xdg = self.tmp / "xdg"
@@ -626,6 +703,33 @@ class Runner(World):
         self.assertIn("sandbox: interrupted by SIGINT; the container, if it had started, was killed", err)
         name = f"oxedi-sandbox-{layout.path_hash(checkout)}"
         self.assertIn(["kill", name], [c["argv"] for c in self.calls()])
+
+    def test_sighup_kills_and_removes_the_placeholders(self):
+        checkout = self.checkout()
+        process = self.start(checkout, FAKE_RUN_SLEEP="30")
+        self.wait_for_run()
+        self.assertTrue((checkout / "GNUmakefile").exists())
+        process.send_signal(signal.SIGHUP)
+        _, err = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, 129, err)
+        self.assertIn("sandbox: interrupted by SIGHUP; the container, if it had started, was killed", err)
+        self.assertEqual([n for n in ("GNUmakefile", "makefile", "conftest.py") if (checkout / n).exists()], [])
+
+    def test_an_ignored_sighup_stays_ignored(self):
+        checkout = self.checkout()
+        process = subprocess.Popen(
+            [sys.executable, "-I", str(SCRIPT), "--image", "oxedi-sandbox:test", "--kind", "base",
+             "--checkout", str(checkout)],
+            env=self.env(FAKE_RUN_SLEEP="2"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN),
+        )
+        self.wait_for_run()
+        process.send_signal(signal.SIGHUP)
+        _, err = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, 0, err)
+        self.assertNotIn("interrupted", err)
+        name = f"oxedi-sandbox-{layout.path_hash(checkout)}"
+        self.assertNotIn(["kill", name], [c["argv"] for c in self.calls()])
 
     def test_sigterm_kills(self):
         checkout = self.checkout()
@@ -802,8 +906,10 @@ WASM_PINS = viewer_image.wasm_pins(INSTALL_TOOLS)
 
 
 def base_tag() -> str:
-    """The base image tag make derives from this repository's sandbox Dockerfile and pip-audit.txt."""
-    inputs = b"".join((SCRIPT.parent / name).read_bytes() for name in ("Dockerfile", "pip-audit.txt"))
+    """The base image tag make derives from this repository's sandbox Dockerfile, pip-audit.txt and
+    rust-toolchain.toml."""
+    inputs = b"".join(path.read_bytes() for path in (
+        SCRIPT.parent / "Dockerfile", SCRIPT.parent / "pip-audit.txt", REPO / "rust-toolchain.toml"))
     return f"oxedi-sandbox:{hashlib.sha256(inputs).hexdigest()[:12]}"
 
 
@@ -1066,6 +1172,41 @@ class Images(World):
                 # No build or run: docker is only asked for its server's architecture.
                 self.assertEqual({c["argv"][0] for c in self.calls()}, {"version"})
                 (self.fake / "calls.jsonl").unlink(missing_ok=True)
+
+    def test_image_refuses_a_channel_that_is_not_exact(self):
+        checkout = make_repo_copy(self.tmp / "repo")
+        for channel in ("stable", "1.99", "nightly-2026-01-01"):
+            with self.subTest(channel=channel):
+                (checkout / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{channel}"\n')
+                result = self.make(checkout, "sandbox-image")
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stderr.splitlines()[0],
+                    f"sandbox-image: rust-toolchain.toml names no exact channel X.Y.Z (found '{channel}'); "
+                    "set channel to a version such as 1.99.0")
+                self.assertEqual([c for c in self.calls() if c["argv"][0] == "build"], [])
+
+    def test_image_builds_with_the_channel_of_the_file(self):
+        checkout = make_repo_copy(self.tmp / "repo")
+        result = self.make(checkout, "sandbox-image")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        builds = [c["argv"] for c in self.calls() if c["argv"][0] == "build"]
+        self.assertEqual(len(builds), 2)
+        for argv in builds:
+            self.assertIn("RUST_VERSION=1.99.0", argv)
+
+    def test_base_tag_follows_rust_toolchain(self):
+        checkout = make_repo_copy(self.tmp / "repo")
+
+        def tag() -> str:
+            result = self.make(checkout, "sandbox", "CMD=true")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return re.search(r"image (oxedi-sandbox:\S+) \(base", result.stderr).group(1)
+
+        before = tag()
+        self.assertTrue(before.startswith("oxedi-sandbox:"))
+        (checkout / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.99.1"\n')
+        self.assertNotEqual(tag(), before)
 
     def test_kind_required_with_image(self):
         result = subprocess.run(

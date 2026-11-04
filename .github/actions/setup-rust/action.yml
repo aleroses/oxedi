@@ -1,6 +1,6 @@
 name: Set up Rust
 description: >-
-  Installs the stable toolchain with the requested targets and components and restores the
+  Installs the toolchain rust-toolchain.toml pins, with the requested targets and components and restores the
   compile cache. The cache is written only from master; other refs read it.
 inputs:
   targets:
@@ -25,8 +25,14 @@ inputs:
 runs:
   using: composite
   steps:
+    - id: channel
+      shell: bash
+      run: |
+        channel=$(python3 -I -c "import tomllib; print(tomllib.load(open('rust-toolchain.toml', 'rb'))['toolchain']['channel'])")
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
     - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       with:
+        toolchain: ${{ steps.channel.outputs.channel }}
         targets: ${{ inputs.targets }}
         components: ${{ inputs.components }}
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

@@ -1,5 +1,6 @@
 """The sandbox's storage on the host: shared caches and each checkout's target/, venvs, the
-empty file bound over every ignored file and the record of the last dirty audit."""
+empty file bound over every ignored file, the stand-ins bound over the absent root names and the
+record of the last dirty audit."""
 
 import os
 import shutil
@@ -7,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from layout import Checkout, SandboxError, path_hash, refuse_links, refuse_unsafe
+from layout import STAND_INS, Checkout, SandboxError, path_hash, refuse_links, refuse_unsafe
 
 
 @dataclass(frozen=True)
@@ -25,8 +26,12 @@ class Storage:
     viewer_pkg: Path
     # An empty read-only file, bound over every file git ignores so a run cannot read it.
     empty: Path
+    # One read-only file per name of `layout.STAND_INS`, bound over that root name when it is absent.
+    stand_ins: Path
     # The paths the last dirty audit named, with what each was then; never mounted.
     record: Path
+    # The root names the run phase holds, written before they are made; never mounted.
+    held: Path
 
     @property
     def advisory(self) -> Path:
@@ -42,12 +47,28 @@ def cache_root(env: dict[str, str]) -> Path:
     return base / "oxedi-sandbox"
 
 
+def own_dir(cache: Path, root: Path) -> Path:
+    """The storage of the checkout at `root`."""
+    return cache / path_hash(root)
+
+
+def record_for(cache: Path, root: Path) -> Path:
+    """Where the last dirty audit of the checkout at `root` is recorded."""
+    return own_dir(cache, root) / "audit.json"
+
+
+def held_for(cache: Path, root: Path) -> Path:
+    """Where the names the run phase holds in the checkout at `root` are listed while it runs."""
+    return own_dir(cache, root) / "held.json"
+
+
 def storage_for(cache: Path, checkout: Checkout) -> Storage:
     refuse_unsafe(cache, "storage")
-    own = cache / path_hash(checkout.root)
+    own = own_dir(cache, checkout.root)
     return Storage(
         cache, cache / "cargo", cache / "uv", own / "target", own / "venv", own / "venv-docs",
-        own / "viewer-pkg", own / "empty", own / "audit.json",
+        own / "viewer-pkg", own / "empty", own / "stand-ins", record_for(cache, checkout.root),
+        held_for(cache, checkout.root),
     )
 
 
@@ -80,10 +101,15 @@ def prepare(storage: Storage, checkout: Checkout, mount_points: tuple[str, ...])
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     for mount_point in mount_points:
         make_mount_point(checkout.root, mount_point)
-    # Made anew each time, so it is empty whatever happened to it on the host.
-    if os.path.lexists(storage.empty):
-        remove(storage.empty)
+    # Made anew each time, so they hold what the run must read whatever happened to them on the host.
+    for made in (storage.empty, storage.stand_ins):
+        if os.path.lexists(made):
+            remove(made)
     storage.empty.touch(mode=0o444)
+    storage.stand_ins.mkdir(mode=0o700)
+    for name, body in STAND_INS.items():
+        (storage.stand_ins / name).write_text(body)
+        (storage.stand_ins / name).chmod(0o444)
 
 
 def is_tree(path: Path) -> bool:

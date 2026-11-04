@@ -1,6 +1,8 @@
 """Tests of viewer_image.py: the pins it reads and the tag it derives, on temporary trees only."""
 
 import hashlib
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -124,9 +126,10 @@ class TreeDigest(unittest.TestCase):
             write(root, name, text)
         return root
 
-    def test_the_markers_and_the_creation_order_do_not_count(self):
+    def test_markers_ignored(self):
         first = self.make({"a/x": "1", "b": "2"})
         second = self.make({"b": "2", "a/x": "1", "a/INSTALLATION_COMPLETE": "", "DEPENDENCIES_VALIDATED": ""})
+        (second / "a" / "INSTALLATION_COMPLETE").chmod(0o755)
         self.assertEqual(viewer_image.tree_digest(first), viewer_image.tree_digest(second))
 
     def test_content_and_path_both_count(self):
@@ -134,12 +137,39 @@ class TreeDigest(unittest.TestCase):
         self.assertNotEqual(base, viewer_image.tree_digest(self.make({"a": "2"})))
         self.assertNotEqual(base, viewer_image.tree_digest(self.make({"b": "1"})))
 
-    def test_a_known_tree_has_a_known_digest(self):
-        line = hashlib.sha256(b"1").hexdigest() + "  a\n"
-        self.assertEqual(
-            viewer_image.tree_digest(self.make({"a": "1"})), hashlib.sha256(line.encode()).hexdigest()
-        )
+    def test_mode_changes_digest(self):
+        plain, executable = self.make({"a": "1"}), self.make({"a": "1"})
+        (plain / "a").chmod(0o644)
+        (executable / "a").chmod(0o755)
+        self.assertNotEqual(viewer_image.tree_digest(plain), viewer_image.tree_digest(executable))
 
+    def test_symlink_target_changes_digest(self):
+        trees = []
+        for target in ("x", "y"):
+            root = self.make({"x": "1", "y": "1"})
+            (root / "link").symlink_to(target)
+            trees.append(root)
+        without = self.make({"x": "1", "y": "1"})
+        digests = {viewer_image.tree_digest(root) for root in (*trees, without)}
+        self.assertEqual(len(digests), 3)
+
+    def test_a_linked_directory_is_not_followed(self):
+        root = self.make({"d/x": "1"})
+        (root / "e").symlink_to("d")
+        (root / "d").chmod(0o755)
+        (root / "d" / "x").chmod(0o644)
+        lines = (
+            f"{hashlib.sha256(b'1').hexdigest()}  0644  d/x\n",
+            # A link's own mode is the platform's (0777 on Linux).
+            f"link  {stat.S_IMODE(os.lstat(root / 'e').st_mode):04o}  e -> d\n",
+        )
+        self.assertEqual(viewer_image.tree_digest(root), hashlib.sha256("".join(lines).encode()).hexdigest())
+
+    def test_a_known_tree_has_a_known_digest(self):
+        root = self.make({"a": "1"})
+        (root / "a").chmod(0o644)
+        line = hashlib.sha256(b"1").hexdigest() + "  0644  a\n"
+        self.assertEqual(viewer_image.tree_digest(root), hashlib.sha256(line.encode()).hexdigest())
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,10 +17,11 @@ ARG WASM_BINDGEN_SHA256
 ARG BINARYEN_VERSION
 ARG BINARYEN_SHA256
 ARG PLAYWRIGHT_VERSION
-# SHA-256 of the installed chromium-headless-shell tree (viewer_image.py tree-digest). A new
+# SHA-256 of the installed chromium-headless-shell tree, each file with its mode and each symbolic
+# link with its target (viewer_image.py tree-digest). A new
 # Playwright pin installs another revision: build once with a wrong value, the failure prints the
 # digest found.
-ARG CHROMIUM_TREE_SHA256_AMD64=02e8e445b524088263f1536f4ef97c54324c25c23517d615daffb235cbf75067
+ARG CHROMIUM_TREE_SHA256_AMD64=8476450b962800348045b21114aea523a12c9fcd86339ac2d70f196678fa0daf
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 

@@ -204,9 +204,15 @@ the same one.
 
 ## Setup
 
-Prerequisites: the Rust toolchain pinned in `rust-toolchain.toml` (installed by `rustup`),
-Python 3.11 or later, and [uv](https://docs.astral.sh/uv/). `make venv` creates `.venv` with
-maturin and the test tools.
+Prerequisites: [rustup](https://rustup.rs), Python 3.11 or later, and
+[uv](https://docs.astral.sh/uv/). `make venv` creates `.venv` with maturin and the test tools.
+
+The Rust version lives in one place: the `channel` of `rust-toolchain.toml`, an exact `X.Y.Z`
+with clippy and rustfmt. rustup installs it on the first `cargo` command in the checkout, and CI
+and the sandbox image read it from that file, so clippy and fmt give the same result on your
+machine, in CI and in the sandbox. Nothing else names the version, so a bump edits only that line
+of `rust-toolchain.toml`, in a pull request of its own (see [Bumping Rust](#sandbox) in the
+Sandbox section).
 
 ```bash
 make help       # list every target, grouped by area (the targets live in make/*.mk)
@@ -408,8 +414,8 @@ or later, an assignment in an exported `MAKEFLAGS` cannot be told apart from the
 there only the origin check holds.
 
 **What the container is.** A pinned image (`tools/sandbox/Dockerfile`: Ubuntu 24.04, the Rust
-version CI gates with as `ARG RUST_VERSION`, CPython 3.11 and 3.13, uv, cargo-deny and pip-audit;
-no `git`), tagged with the hash of its Dockerfile and `pip-audit.txt`. The container runs as you, with a read-only root, no capabilities, no new
+version `rust-toolchain.toml` pins, CPython 3.11 and 3.13, uv, cargo-deny and pip-audit;
+no `git`), tagged with the hash of its Dockerfile, `pip-audit.txt` and `rust-toolchain.toml`. The container runs as you, with a read-only root, no capabilities, no new
 privileges, the default seccomp profile and limits on processes, memory and CPUs. It gets a fixed
 environment, never a variable of your shell, and no part of your home other than its own storage:
 no `~/.ssh`, `~/.pypirc`, `~/.config/gh`, Docker socket or the private samples.
@@ -452,10 +458,24 @@ over the checkout in both phases: `Makefile`, `make/`, `tools/`, `.cargo/`, `.gi
 `rust-toolchain.toml`, `Cargo.toml`, `Cargo.lock`, `CLAUDE.md`, `.claude/`,
 `crates/oxedi_py/pyproject.toml`, `.git`, `.gitmodules`, every submodule (the DuckDB targets
 include `extension-ci-tools`' makefiles), and every tracked `Cargo.toml`, `Cargo.lock`,
-`rust-toolchain`, `pyproject.toml`, `uv.toml`, `.python-version` and `.cargo/` anywhere. Every
-path git ignores is hidden: a directory behind an empty read-only mount, a file behind an empty
-read-only file, so a run cannot read a local `.env`. The sandbox's own outputs (`target/`,
-`.venv/`, Python caches, the built `_core*.so`) are the exception.
+`rust-toolchain`, `pyproject.toml`, `uv.toml`, `.python-version` and `.cargo/` anywhere, with every
+tracked file a host tool loads by its name alone: `conftest.py`, `pytest.ini`, `setup.cfg`,
+`tox.ini`, `noxfile.py`, `sitecustomize.py`, `usercustomize.py` and `.envrc`. The names make and
+pytest load from the root, `GNUmakefile`, `makefile` and `conftest.py`, are read-only when present;
+when absent, the run phase binds a read-only stand-in over each, so the run cannot create one; the
+stand-ins of the two make names include the next name, so make in the run still reads `Makefile`.
+While the run lasts, the checkout holds a placeholder of each name, one line that says what it is,
+removed when the run ends; host `make` in that checkout stops with that line meanwhile, so use
+another worktree until the run ends. A runner killed before then (SIGKILL, an out-of-memory kill, a power
+loss) leaves them: a host `make` then stops with the placeholder's own line,
+`GNUmakefile:1: *** sandbox: a sandbox run of this checkout holds this placeholder GNUmakefile while it runs; if none is running, a killed run left it: ...`. Remove
+each root `GNUmakefile`, `makefile` or `conftest.py` that holds only such a line; or start the
+runner directly (`python3 -I tools/sandbox/sandbox.py`, below), which removes the placeholders
+that still hold their line, says so, and refuses when one was changed. Ctrl-C, SIGTERM and SIGHUP
+(a closed terminal; a run started with `nohup` ignores it and goes on) stop the runner cleanly and
+leave none. Every path git ignores is hidden: a directory behind an empty read-only mount, a file
+behind an empty read-only file, so a run cannot read a local `.env`. The sandbox's own outputs
+(`target/`, `.venv/`, Python caches, the built `_core*.so`) are the exception.
 
 **The audit.** Before the run the sandbox records what git sees and a fingerprint of every
 tracked and untracked file; after it, it prints every file that changed while the sandbox ran
@@ -465,8 +485,8 @@ Python caches and the built extension from the checkout. It exits 3 when a file 
 path appeared outside those outputs, a path could not be read or an output could not be removed,
 whatever the command's status: read `git status` and `git diff` before running anything from the
 checkout. Otherwise it exits with the command's status (124 past the timeout, 130 on Ctrl-C, 143
-on SIGTERM, 2 when it refuses to start); Ctrl-C and SIGTERM kill the container and run the audit
-first.
+on SIGTERM, 129 on SIGHUP, 2 when it refuses to start); Ctrl-C, SIGTERM and SIGHUP kill the
+container and run the audit first.
 
 A new path that host tools look up by name comes first in the report, with a line that says not
 to run `make` or any tool in the checkout until you remove it: `GNUmakefile` and `makefile` (make
@@ -477,6 +497,19 @@ checkout never loads. A dirty audit is recorded in the checkout's storage, where
 write, and the next run refuses to start (exit 2, naming the paths) while one of them is still as
 the run left it: remove or revert it, or add it with `git add` once you have reviewed it.
 `make sandbox-clean` forgets the record with the rest of the checkout's storage.
+
+**The guard.** While that record names a path still as the run left it, every `make` in the
+checkout refuses too, before any recipe runs, so a `make py-test` never loads a `conftest.py` the
+run planted:
+
+```text
+make/common.mk:NN: *** make: a sandbox run left crates/oxedi_py/tests/x/conftest.py unreviewed; remove or revert them, or git add them once reviewed (make sandbox-clean forgets the record).  Stop.
+```
+
+Clear it the same way: remove or revert each path, or `git add` it once reviewed; or run
+`make sandbox-clean`, which forgets the record. `make help` and `make sandbox-clean` still run
+while the guard refuses. The guard (`tools/sandbox/guard.py`) runs once, in the top-level make;
+with no record it checks that one file is absent and calls no git.
 
 Through `make`, the status shows in make's own line (`make: *** [make/sandbox.mk:...] Error 3`) and
 make exits 2. A script that tests the status calls the runner directly:
@@ -577,7 +610,7 @@ it touches that could not be read), both lists, then `cargo_deny`, `pip_audit`, 
 `run` are `null` when that step did not run (a refusal before it), and `pip_audit` is `[]`.
 
 The exit status is that of `make sandbox` (the command's, 2 refused, 3 dirty audit, 124 timeout,
-130 and 143 on a signal), the fetch's when the fetch failed, and 4 when a confirmation was needed
+129, 130 and 143 on a signal), the fetch's when the fetch failed, and 4 when a confirmation was needed
 and not given. Every refusal is one line starting `sandbox-pr:`.
 
 `make sandbox-pr-check` proves it with a hostile change: in a temporary clone of your checkout, on
@@ -587,17 +620,21 @@ whether each try worked. It reviews that branch with `CONFIRM=yes`, checks that 
 refused, that the canary, your home and your repository's refs are unchanged, and removes the
 clone. One line per check says ok or FAIL.
 
-**Bumping Rust.** When CI moves to a new Rust, change `ARG RUST_VERSION` in
-`tools/sandbox/Dockerfile`, run `make sandbox-image` (the new Dockerfile is a new tag), then run both
-gates: `make gates` on the host and `make sandbox CMD="make gates"`.
+**Bumping Rust.** `rust-toolchain.toml` is the one place the version is written (an exact
+`X.Y.Z`); CI and the image read it from there, and nothing else names it. A bump edits its
+`channel` only, in a pull request of its own: run `make sandbox-image` (the file is an input of
+the tag, so the version is a new tag), then both gates, `make gates` on the host and
+`make sandbox CMD="make gates"`, and fix what the new clippy or rustfmt reports in that same pull
+request.
 
 **Bumping the viewer tools.** Each pin lives in one place, and a bump is a new viewer tag:
 
 - Playwright: change `playwright==` in `docs/requirements.in`, regenerate `docs/requirements.txt`
   with the command in its header (it keeps the hashes), and regenerate `tools/sandbox/playwright.txt`
   at the same version as its header says; `make sandbox-image-viewer` refuses when the two differ.
-  The new Chromium revision fails the first build with the digest of its installed tree: check
-  it, then set `CHROMIUM_TREE_SHA256_AMD64` in `tools/sandbox/Dockerfile.viewer`. Until the image
+  The new Chromium revision fails the first build with the digest of its installed tree (each
+  file's SHA-256 and mode, and each symbolic link's target): check it, then set
+  `CHROMIUM_TREE_SHA256_AMD64` in `tools/sandbox/Dockerfile.viewer`. Until the image
   is rebuilt, `IMAGE=viewer` refuses a checkout with the new pin.
 - `wasm-bindgen` and `wasm-opt`: change the versions and checksums in
   `crates/oxedi_wasm/scripts/install_tools.sh`; the image reads them from there.
