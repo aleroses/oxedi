@@ -15,7 +15,9 @@ build checks and the one it prints on a mismatch come from the same function.
 
 import argparse
 import hashlib
+import os
 import re
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -109,18 +111,34 @@ def tag(root: Path, base_tag: str) -> str:
     return f"{IMAGE_REPOSITORY}:{digest.hexdigest()[:12]}"
 
 
+def tree_line(directory: Path, path: Path) -> str:
+    """`<sha256 or 'link'>  <mode octal>  <relative path>[ -> <target>]` for a regular file or a
+    symbolic link; an empty line for anything else (a directory is named by the paths under it)."""
+    relative = path.relative_to(directory).as_posix()
+    try:
+        info = os.lstat(path)
+        mode = f"{stat.S_IMODE(info.st_mode):04o}"
+        if stat.S_ISLNK(info.st_mode):
+            return f"link  {mode}  {relative} -> {os.readlink(path)}\n"
+        if stat.S_ISREG(info.st_mode):
+            return f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {mode}  {relative}\n"
+    except OSError as error:
+        raise fail(f"cannot read {path}: {error}") from error
+    return ""
+
+
+def unlisted(error: OSError) -> None:
+    raise fail(f"cannot list {error.filename}: {error.strerror or error}")
+
+
 def tree_digest(directory: Path) -> str:
-    """SHA-256 of the sorted `<sha256>  <relative path>` lines of every regular file in the tree,
-    Playwright's marker files and symbolic links left out."""
+    """SHA-256 of the sorted lines (`tree_line`) of every regular file and symbolic link in the tree,
+    with its mode, and each link's target; Playwright's marker files are left out. A link is never
+    followed."""
     lines = []
-    for path in directory.rglob("*"):
-        if path.is_symlink() or not path.is_file() or path.name in TREE_MARKERS:
-            continue
-        try:
-            file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError as error:
-            raise fail(f"cannot read {path}: {error}") from error
-        lines.append(f"{file_hash}  {path.relative_to(directory).as_posix()}\n")
+    for parent, subdirs, files in os.walk(directory, onerror=unlisted):
+        names = (name for name in subdirs + files if name not in TREE_MARKERS)
+        lines.extend(tree_line(directory, Path(parent, name)) for name in names)
     return hashlib.sha256("".join(sorted(lines)).encode("utf-8")).hexdigest()
 
 
