@@ -107,10 +107,9 @@ class Cargo(unittest.TestCase):
 
     def test_unparseable_lock_is_flagged(self):
         diff = deps.cargo_lock_diff(OLD_LOCK, "garbage [[")
-        self.assertEqual(diff, PackageDiff(errors=(
-            "Cargo.lock after the change is not valid TOML: Expected '=' after a key in a key/value pair "
-            "(at line 1, column 9)",
-        )))
+        (error,) = diff.errors
+        self.assertTrue(error.startswith("Cargo.lock after the change is not valid TOML: "), error)
+        self.assertEqual(diff, PackageDiff(errors=(error,)))
         self.assertIs(risk.flagged([], diff, PackageDiff()), True)
 
     def test_a_package_without_a_version_is_a_finding(self):
@@ -171,11 +170,9 @@ class CargoSources(unittest.TestCase):
 
     def test_an_unparseable_file_on_the_new_side_is_unreadable(self):
         found = deps.read_cargo_sources({"Cargo.toml": PATCHED}, {"Cargo.toml": "garbage [[", "Cargo.lock": NEW_LOCK})
-        self.assertEqual(found, deps.CargoSources(
-            urls=("https://github.com/example/c",),
-            unreadable=("Cargo.toml after the change is not valid TOML: Expected '=' after a key in a key/value pair "
-                        "(at line 1, column 9)",),
-        ))
+        (error,) = found.unreadable
+        self.assertTrue(error.startswith("Cargo.toml after the change is not valid TOML: "), error)
+        self.assertEqual(found, deps.CargoSources(urls=("https://github.com/example/c",), unreadable=(error,)))
         self.assertEqual(deps.read_cargo_sources({"Cargo.toml": "garbage [["}, {"Cargo.toml": PATCHED}),
                          deps.CargoSources(urls=("https://evil/x",)))
 

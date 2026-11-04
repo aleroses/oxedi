@@ -22,6 +22,7 @@ from test_source import FILE_TRANSPORT, commit, git, new_repo  # noqa: E402
 
 IMAGE = "oxedi-sandbox:test"
 HOST_DENY = str(HERE.parent / "deny.toml")
+PYPROJECT = '[dependency-groups]\ncontributor = ["pytest"]\n'
 
 
 class Stdin:
@@ -68,10 +69,12 @@ class Flow(unittest.TestCase):
         self.host = new_repo(self.tmp / "host")
         (self.host / "tools" / "sandbox").mkdir(parents=True)
         (self.host / "crates" / "oxedi_core" / "src").mkdir(parents=True)
+        (self.host / "crates" / "oxedi_py").mkdir(parents=True)
         (self.host / ".gitignore").write_text("/target/\n/.venv/\n")
         git(self.host, "add", ".gitignore")
         commit(self.host, "tools/sandbox/deny.toml", "[bans]\n")
         commit(self.host, "crates/oxedi_core/src/lib.rs", "pub fn f() {}\n")
+        commit(self.host, "crates/oxedi_py/pyproject.toml", PYPROJECT)
         git(self.host, "checkout", "-q", "-b", "feature")
 
     def change(self, path: str, text: str = "x\n") -> None:
@@ -113,6 +116,34 @@ class Flow(unittest.TestCase):
         found = sorted(self.reviews().glob("ref-feature-*/report.json"))
         self.assertEqual(len(found), 1, found)
         return json.loads(found[0].read_text())
+
+    def test_pre_group_change_refused(self):
+        self.change("crates/oxedi_py/pyproject.toml", '[dependency-groups]\ndev = ["pytest"]\n')
+        status, out, err = self.review()
+        self.assertEqual(status, 2, err)
+        self.assertEqual(err, "sandbox-pr: the change's crates/oxedi_py/pyproject.toml has no \"contributor\" "
+                              "dependency group, which the fetch installs; rebase the change on master\n")
+        self.assertEqual(self.runs(), [])
+
+    def test_a_change_without_a_pyproject_is_refused(self):
+        git(self.host, "rm", "-q", "crates/oxedi_py/pyproject.toml")
+        git(self.host, "commit", "-q", "-m", "remove")
+        status, _, err = self.review()
+        self.assertEqual((status, self.runs()), (2, []))
+        self.assertEqual(err, 'sandbox-pr: the change has no crates/oxedi_py/pyproject.toml, which the fetch reads '
+                              'for the "contributor" dependency group; rebase the change on master\n')
+
+    def test_a_change_without_any_group_table_is_refused(self):
+        self.change("crates/oxedi_py/pyproject.toml", '[project]\nname = "x"\n')
+        status, _, err = self.review()
+        self.assertEqual((status, self.runs()), (2, []))
+        self.assertIn('has no "contributor" dependency group', err)
+
+    def test_a_pyproject_that_is_not_toml_is_refused_with_its_path(self):
+        self.change("crates/oxedi_py/pyproject.toml", "garbage [[\n")
+        status, _, err = self.review()
+        self.assertEqual((status, self.runs()), (2, []))
+        self.assertTrue(err.startswith("sandbox-pr: crates/oxedi_py/pyproject.toml is not valid TOML: "), err)
 
     def test_flagged_without_tty_stops_with_4(self):
         self.change("crates/oxedi_core/build.rs", "fn main() {}\n")
@@ -277,16 +308,16 @@ class Flow(unittest.TestCase):
         status, out, err = self.review()
         self.assertEqual(status, 4, err)
         self.assertEqual(self.runs(), [])
-        line = ("Cargo.toml after the change is not valid TOML: Expected '=' after a key in a key/value pair "
-                "(at line 1, column 9)")
-        self.assertIn(f"sandbox-pr: cannot read a cargo file the change touches: {line}\n", err)
+        prefix = "Cargo.toml after the change is not valid TOML: "
+        self.assertIn(f"sandbox-pr: cannot read a cargo file the change touches: {prefix}", err)
         self.assertIn(
             "sandbox-pr: cargo-deny would read a cargo file whose sources cannot be checked; there is no terminal "
             "to ask, so it stops with exit 4", err)
-        self.assertIn(f"new cargo sources:\n  none\n  cannot read: {line}\n", out)
+        self.assertIn(f"new cargo sources:\n  none\n  cannot read: {prefix}", out)
         report = self.report()
-        self.assertEqual((report["new_sources"], report["unreadable_cargo"], report["confirmed"]),
-                         ([], [line], "refused"))
+        (line,) = report["unreadable_cargo"]
+        self.assertTrue(line.startswith(prefix), line)
+        self.assertEqual((report["new_sources"], report["confirmed"]), ([], "refused"))
 
     def test_a_non_utf8_manifest_asks_before_deny(self):
         (self.host / "Cargo.toml").write_bytes(b"\xff\xfe")
@@ -337,7 +368,8 @@ class Flow(unittest.TestCase):
 
     def test_source_names_another_checkout(self):
         other = new_repo(self.tmp / "other")
-        commit(other, "readme.txt", "r\n")
+        (other / "crates" / "oxedi_py").mkdir(parents=True)
+        commit(other, "crates/oxedi_py/pyproject.toml", PYPROJECT)
         git(other, "checkout", "-q", "-b", "feature")
         commit(other, "build.rs", "fn main() {}\n")
         status, _, err = self.review(SANDBOX_SOURCE=str(other))

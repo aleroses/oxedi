@@ -39,9 +39,9 @@ from pathlib import Path
 # Isolated mode leaves the script's own directory out of sys.path; tools/ is read-only in a run.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from arguments import VENVS, ImageKind, Phase, deny_command, pip_audit_command  # noqa: E402
+from arguments import CONTRIBUTOR_GROUP, VENVS, ImageKind, Phase, deny_command, pip_audit_command  # noqa: E402
 from audit import DIRTY_STATUS  # noqa: E402
-from deps import dependency_diffs, new_cargo_sources  # noqa: E402
+from deps import blob, dependency_diffs, new_cargo_sources, toml  # noqa: E402
 from layout import SandboxError, container_name  # noqa: E402
 from lifecycle import refuse_if_running, run_container  # noqa: E402
 from report import (  # noqa: E402
@@ -141,6 +141,25 @@ def fresh_clone(cache: Path, source: Path, request: Request) -> tuple[Change, Pa
     return change, review / "checkout"
 
 
+def require_contributor_group(change: Change, root: Path) -> None:
+    """Refuses, before any container, a change whose pyproject.toml declares no group the fetch
+    installs: `uv pip install --group` would fail after the network phase started."""
+    path, _, group = CONTRIBUTOR_GROUP.partition(":")
+    if isolated_git(root, "cat-file", "-e", f"{change.tested}:{path}").returncode != 0:
+        raise SandboxError(f"the change has no {path}, which the fetch reads for the \"{group}\" dependency group; "
+                           "rebase the change on master")
+    try:
+        data = toml(blob(root, change.tested, path).decode(), path)
+    except UnicodeDecodeError as error:
+        raise SandboxError(f"the change's {path} is not UTF-8 text: {error}") from error
+    except ValueError as error:
+        raise SandboxError(str(error)) from error
+    groups = data.get("dependency-groups")
+    if not isinstance(groups, dict) or group not in groups:
+        raise SandboxError(f"the change's {path} has no \"{group}\" dependency group, which the fetch installs; "
+                           "rebase the change on master")
+
+
 def assess(change: Change, root: Path) -> Risk:
     paths = touched(change, root)
     names = [t.path for t in paths]
@@ -237,6 +256,7 @@ def review_change(image: str, kind: ImageKind, host: Path, env: dict[str, str]) 
     source = source_checkout(host, env)
     info = checked_daemon()
     change, root = fresh_clone(cache_root(env), source, settings.request)
+    require_contributor_group(change, root)
     plan = ready(image, kind, root, env, info)
     risk = assess(change, root)
     hint = image_hint(list(risk.touched), kind)

@@ -757,8 +757,8 @@ class Fetch(World):
         self.assertEqual(len(self.fetches()), 1)
         self.assertFalse([c for c in self.runs() if "bash" in c["argv"]])
         self.assertIn(
-            "sandbox: fetch failed: cargo fetch --locked exited 101; the fetch needs the network "
-            "and never falls back to the caches offline",
+            "sandbox: fetch failed: cargo fetch --locked exited 101; read its output above "
+            "(no network, or a package or group the checkout does not declare)",
             result.stderr,
         )
 

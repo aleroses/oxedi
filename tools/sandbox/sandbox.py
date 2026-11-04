@@ -123,8 +123,8 @@ def fetch_phase(plan: Plan) -> int:
         outcome = run_container(plan.argv(Phase.FETCH, command), plan.checkout.name, max(1.0, remaining))
         if outcome.status != 0:
             budget = f"the fetch ran past its {FETCH_BUDGET_S} s budget"
-            failure = (f"fetch failed: {' '.join(command)} exited {outcome.status}; the fetch needs the network "
-                       "and never falls back to the caches offline")
+            failure = (f"fetch failed: {' '.join(command)} exited {outcome.status}; "
+                       "read its output above (no network, or a package or group the checkout does not declare)")
             print(f"sandbox: {explain(outcome, plan.limits, budget, failure)}", file=sys.stderr)
             return outcome.status
     print(f"sandbox: fetch took {time.monotonic() - started:.1f} s", file=sys.stderr)
