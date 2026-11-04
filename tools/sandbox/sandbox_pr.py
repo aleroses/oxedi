@@ -22,14 +22,14 @@ its merge ref) or SANDBOX_REF (a ref of the host checkout). SANDBOX_TARGET is th
 `make gates && make py-test`); `--kind viewer` runs it in the viewer image, with the docs venv
 fetched and audited too. SANDBOX_CONFIRM=yes answers every confirmation. SANDBOX_SOURCE, for
 tests, names another git checkout to clone from. The limits are those of sandbox.py.
-Exit status: as sandbox.py (the command's, 2 refused, 3 dirty audit, 124 timeout, 130 and 143 on a
-signal), the fetch's when the fetch failed, and 4 when a confirmation was needed and not given.
+Exit status: as sandbox.py (the command's, 2 refused, 3 dirty audit, 124 timeout, 129, 130 and
+143 on a signal), the fetch's when the fetch failed, and 4 when a confirmation was needed and not
+given.
 """
 
 import argparse
 import os
 import re
-import signal
 import subprocess
 import sys
 from collections.abc import MutableMapping
@@ -50,7 +50,7 @@ from report import (  # noqa: E402
 )
 from risk import Risk, image_hint, touched  # noqa: E402
 from sandbox import (  # noqa: E402
-    STOP_SIGNALS, Plan, Stopped, audited, checked_daemon, fetch_phase, ready, run_phase, stop,
+    Plan, Stopped, audited, checked_daemon, fetch_phase, install_stop_handlers, ready, run_phase,
 )
 from source import GIT_ENV, GIT_OPTIONS, Change, Request, clone, isolated_git  # noqa: E402
 from storage import cache_root, clean, forget, reviews  # noqa: E402
@@ -277,8 +277,7 @@ def main(argv: list[str]) -> int:
                         help="what the --image is: the base image or the viewer one")
     parser.add_argument("--checkout", required=True, type=Path, help="the host checkout whose rules apply")
     args = parser.parse_args(argv)
-    for signum in STOP_SIGNALS:
-        signal.signal(signum, stop)
+    install_stop_handlers()
     git_isolation(os.environ)
     try:
         return review_change(args.image, ImageKind(args.kind), args.checkout.resolve(), dict(os.environ))

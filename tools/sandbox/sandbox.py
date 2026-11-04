@@ -78,6 +78,14 @@ def stop(signum: int, _frame) -> None:
     raise Stopped(signum)
 
 
+def install_stop_handlers() -> None:
+    """Makes every stop signal raise `Stopped`, except one the parent ignores: an ignored SIGHUP
+    stays ignored, so a run started with `nohup` survives a closed terminal."""
+    for signum in STOP_SIGNALS:
+        if signal.getsignal(signum) != signal.SIG_IGN:
+            signal.signal(signum, stop)
+
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -291,8 +299,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.image is not None and args.kind is None:
         parser.error("--image needs --kind base or --kind viewer")
-    for signum in STOP_SIGNALS:
-        signal.signal(signum, stop)
+    install_stop_handlers()
     try:
         if args.clean is not None:
             return clean_storage(args.clean == "all", args.checkout.resolve(), dict(os.environ))

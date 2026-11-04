@@ -470,9 +470,10 @@ loss) leaves them: a host `make` then stops with the placeholder's own line,
 each root `GNUmakefile`, `makefile` or `conftest.py` that holds only such a line; or start the
 runner directly (`python3 -I tools/sandbox/sandbox.py`, below), which removes the placeholders
 that still hold their line, says so, and refuses when one was changed. Ctrl-C, SIGTERM and SIGHUP
-(a closed terminal) stop the runner cleanly and leave none. Every path git ignores is hidden: a directory behind an empty read-only mount, a file behind an empty
-read-only file, so a run cannot read a local `.env`. The sandbox's own outputs (`target/`,
-`.venv/`, Python caches, the built `_core*.so`) are the exception.
+(a closed terminal; a run started with `nohup` ignores it and goes on) stop the runner cleanly and
+leave none. Every path git ignores is hidden: a directory behind an empty read-only mount, a file
+behind an empty read-only file, so a run cannot read a local `.env`. The sandbox's own outputs
+(`target/`, `.venv/`, Python caches, the built `_core*.so`) are the exception.
 
 **The audit.** Before the run the sandbox records what git sees and a fingerprint of every
 tracked and untracked file; after it, it prints every file that changed while the sandbox ran
@@ -482,8 +483,8 @@ Python caches and the built extension from the checkout. It exits 3 when a file 
 path appeared outside those outputs, a path could not be read or an output could not be removed,
 whatever the command's status: read `git status` and `git diff` before running anything from the
 checkout. Otherwise it exits with the command's status (124 past the timeout, 130 on Ctrl-C, 143
-on SIGTERM, 129 on SIGHUP, 2 when it refuses to start); Ctrl-C, SIGTERM and SIGHUP kill the container and run the audit
-first.
+on SIGTERM, 129 on SIGHUP, 2 when it refuses to start); Ctrl-C, SIGTERM and SIGHUP kill the
+container and run the audit first.
 
 A new path that host tools look up by name comes first in the report, with a line that says not
 to run `make` or any tool in the checkout until you remove it: `GNUmakefile` and `makefile` (make

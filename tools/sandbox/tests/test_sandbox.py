@@ -697,6 +697,22 @@ class Runner(World):
         self.assertIn("sandbox: interrupted by SIGHUP; the container, if it had started, was killed", err)
         self.assertEqual([n for n in ("GNUmakefile", "makefile", "conftest.py") if (checkout / n).exists()], [])
 
+    def test_an_ignored_sighup_stays_ignored(self):
+        checkout = self.checkout()
+        process = subprocess.Popen(
+            [sys.executable, "-I", str(SCRIPT), "--image", "oxedi-sandbox:test", "--kind", "base",
+             "--checkout", str(checkout)],
+            env=self.env(FAKE_RUN_SLEEP="2"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN),
+        )
+        self.wait_for_run()
+        process.send_signal(signal.SIGHUP)
+        _, err = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, 0, err)
+        self.assertNotIn("interrupted", err)
+        name = f"oxedi-sandbox-{layout.path_hash(checkout)}"
+        self.assertNotIn(["kill", name], [c["argv"] for c in self.calls()])
+
     def test_sigterm_kills(self):
         checkout = self.checkout()
         process = self.start(checkout, FAKE_RUN_SLEEP="30")
