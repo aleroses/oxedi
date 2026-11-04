@@ -13,6 +13,7 @@
   --warn-bg: #fde8e8;
   --warn-text: #8a1c1c;
   --gradient-accent: linear-gradient(135deg, #4d6dc0, #3d5aa6);
+  --version-bg: #2c4178;
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --space-6: 6px;
   --space-8: 8px;
@@ -50,6 +51,7 @@
     --warn-bg: #3a1f1f;
     --warn-text: #ffb4b4;
     --gradient-accent: linear-gradient(135deg, #7a9ae8, #6b8fd8);
+    --version-bg: #4868ae;
   }
 }
 
@@ -63,7 +65,17 @@ body {
 }
 
 a { color: var(--accent); }
-h1 { font-size: var(--text-xl); margin: 0; }
+h1 {
+  display: inline-flex; align-items: center; align-self: stretch; gap: var(--space-8);
+  margin: 0; padding: var(--space-6) var(--space-12); border-radius: var(--radius-pill);
+  background: var(--gradient-accent); color: var(--accent-text);
+  font-family: var(--mono); font-size: var(--text-xl); font-weight: var(--weight-semibold);
+  line-height: 1.2;
+}
+h1:has(+ #version:not(:empty)) {
+  border-top-right-radius: 0; border-bottom-right-radius: 0;
+}
+h1 svg { display: block; flex: 0 0 auto; }
 h2 { font-size: var(--text-lg); margin: 1.25rem 0 0.5rem; }
 .muted { color: var(--muted); }
 [hidden] { display: none !important; }
@@ -72,7 +84,17 @@ h2 { font-size: var(--text-lg); margin: 1.25rem 0 0.5rem; }
 
 .top, main { max-width: 80rem; margin: 0 auto; padding: 0 var(--space-16); }
 .top { padding-top: var(--space-12); }
-.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-6) 14px; }
+.brand { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-6) 0; }
+.brand a { margin-left: var(--space-12); }
+#version {
+  display: inline-flex; align-items: center; align-self: stretch;
+  padding: var(--space-6) var(--space-12);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  background: var(--version-bg); color: #ffffff;
+  font-family: var(--mono); font-size: var(--text-sm); font-weight: var(--weight-semibold);
+  line-height: 1.2;
+}
+#version:empty { display: none; }
 .privacy { margin: 4px 0 var(--space-12); color: var(--muted); font-size: var(--text-md); }
 
 button, select, input[type="search"] {
