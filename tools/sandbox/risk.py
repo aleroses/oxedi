@@ -181,7 +181,7 @@ class Risk:
     touched: tuple[Touched, ...]
     cargo: PackageDiff
     python: PackageDiff
-    # What the change's Cargo.toml and Cargo.lock files add as sources, and which cannot be read.
+    # What the change's Cargo files (Cargo.toml, Cargo.lock, .cargo/config) add as sources, and which cannot be read.
     new_sources: CargoSources
 
     @property

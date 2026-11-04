@@ -144,6 +144,22 @@ class Flow(unittest.TestCase):
         status, _, err = self.review()
         self.assertEqual((status, self.runs()), (2, []))
         self.assertTrue(err.startswith("sandbox-pr: crates/oxedi_py/pyproject.toml is not valid TOML: "), err)
+        self.assertTrue(err.endswith("; fix the file or rebase the change on master\n"), err)
+
+    def test_a_pyproject_that_is_not_utf8_is_refused(self):
+        path = "crates/oxedi_py/pyproject.toml"
+        (self.host / path).write_bytes(b"\xff" + PYPROJECT.encode())
+        git(self.host, "commit", "-q", "-am", "latin")
+        status, _, err = self.review()
+        self.assertEqual((status, self.runs()), (2, []))
+        self.assertEqual(err, f"sandbox-pr: the change's {path} is not UTF-8 text: 'utf-8' codec can't decode byte "
+                              "0xff in position 0: invalid start byte; fix the file or rebase the change on master\n")
+
+    def test_a_bom_pyproject_with_the_group_is_not_refused(self):
+        self.change("crates/oxedi_py/pyproject.toml", "﻿" + PYPROJECT)
+        status, _, err = self.review(SANDBOX_CONFIRM="yes")
+        self.assertEqual(status, 0, err)
+        self.assertNotIn("dependency group", err)
 
     def test_flagged_without_tty_stops_with_4(self):
         self.change("crates/oxedi_core/build.rs", "fn main() {}\n")
@@ -448,16 +464,16 @@ class Flow(unittest.TestCase):
     def test_variables_are_read_from_the_command_line_only(self):
         checkout = make_repo_copy(self.tmp / "copy")
         cases = (
-            ("sandbox", "CMD", 'CMD="make gates"', []),
-            ("sandbox-pr", "PR", "PR=251", []),
-            ("sandbox-pr", "REF", "REF=feature", []),
-            ("sandbox-pr", "HEAD", "HEAD=1", []),
-            ("sandbox-pr", "TARGET", 'TARGET="make py-test"', []),
-            ("sandbox-pr", "CONFIRM", "CONFIRM=yes", []),
+            ("sandbox", "CMD", 'CMD="make gates"'),
+            ("sandbox-pr", "PR", "PR=251"),
+            ("sandbox-pr", "REF", "REF=feature"),
+            ("sandbox-pr", "HEAD", "HEAD=1"),
+            ("sandbox-pr", "TARGET", 'TARGET="make py-test"'),
+            ("sandbox-pr", "CONFIRM", "CONFIRM=yes"),
         )
-        for target, name, example, args in cases:
+        for target, name, example in cases:
             with self.subTest(variable=name):
-                result = subprocess.run(["make", "--no-print-directory", "-C", str(checkout), target, *args],
+                result = subprocess.run(["make", "--no-print-directory", "-C", str(checkout), target],
                                         env=self.env(**{name: "1"}), capture_output=True, text=True, timeout=120)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertEqual(result.stderr.splitlines()[0],

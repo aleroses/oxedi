@@ -151,9 +151,10 @@ def require_contributor_group(change: Change, root: Path) -> None:
     try:
         data = toml(blob(root, change.tested, path).decode(), path)
     except UnicodeDecodeError as error:
-        raise SandboxError(f"the change's {path} is not UTF-8 text: {error}") from error
+        raise SandboxError(f"the change's {path} is not UTF-8 text: {error}; fix the file or rebase the change "
+                           "on master") from error
     except ValueError as error:
-        raise SandboxError(str(error)) from error
+        raise SandboxError(f"{error}; fix the file or rebase the change on master") from error
     groups = data.get("dependency-groups")
     if not isinstance(groups, dict) or group not in groups:
         raise SandboxError(f"the change's {path} has no \"{group}\" dependency group, which the fetch installs; "

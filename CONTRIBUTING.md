@@ -536,10 +536,11 @@ Then, in order:
    uv sources and package indexes (`[tool.uv.sources]`, `index-url` and the like), so a
    dependency moved to a git URL or another index shows as changed.
 2. A confirmation before `cargo-deny`, which resolves the change's manifests and so can reach a
-   source the change adds: asked when the change adds a git or registry source to a
-   `Cargo.toml` or `Cargo.lock` (each URL is listed first), and when a Cargo file it touches
-   cannot be read (not UTF-8 or not TOML), because its sources cannot be checked. Same
-   `y/N`, exit 4 and `CONFIRM=yes` as below.
+   source the change adds: asked when the change adds a git or registry source (a `git` or
+   `registry-index` URL, a `[source.*]` registry, or a `[registries.*]` index that a dependency's
+   `registry` name leads to) to a `Cargo.toml`, a `Cargo.lock` or a `.cargo/config(.toml)` (each
+   URL is listed first), and when a Cargo file it touches cannot be read (not UTF-8 or not
+   TOML), because its sources cannot be checked. Same `y/N`, exit 4 and `CONFIRM=yes` as below.
 3. `cargo-deny` (advisories, sources, bans) over the change's `Cargo.lock`, in a container with
    the network and the checkout read-only.
 4. A confirmation when something is flagged or cargo-deny failed: `y/N` on a terminal; without

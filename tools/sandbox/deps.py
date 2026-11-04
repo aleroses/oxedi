@@ -9,7 +9,7 @@ import dataclasses
 import os
 import re
 import tomllib
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
@@ -72,8 +72,9 @@ def strings(value: object, where: str) -> list[str]:
 
 
 def toml(text: str, where: str) -> dict:
+    """A TOML text parsed, without a leading UTF-8 byte order mark, as cargo and uv drop it."""
     try:
-        return tomllib.loads(text)
+        return tomllib.loads(text.removeprefix("\ufeff"))
     except tomllib.TOMLDecodeError as error:
         raise ValueError(f"{where} is not valid TOML: {error}") from error
 
@@ -132,18 +133,25 @@ def strings_under(value: object, key: str) -> Iterator[str]:
 
 
 def manifest_sources(data: dict) -> set[str]:
-    """The URLs a Cargo.toml names: every `git`, in a dependency table of any kind or target, in
-    `[patch.*]`, `[replace]` or `[source.*]`, and the `registry` of a `[source.*]` table (a
-    dependency's `registry` is a name, not a URL). `git` is taken at any depth on purpose, even under
-    `[package.metadata]`: reporting one URL too many is the safe side."""
+    """The URLs a Cargo.toml names: every `git` and `registry-index`, in a dependency table of any
+    kind or target, in `[patch.*]`, `[replace]` or `[source.*]`, and the `registry` of a `[source.*]`
+    table (a dependency's `registry` is a name, resolved by `config_sources`). Both keys are taken at
+    any depth on purpose, even under `[package.metadata]`: reporting one URL too many is the safe side."""
     sources = data.get("source", {})
     tables = sources.values() if isinstance(sources, dict) else ()
-    return set(strings_under(data, "git")) | {url for source in tables for url in strings_under(source, "registry")}
+    return ({url for key in ("git", "registry-index") for url in strings_under(data, key)}
+            | {url for source in tables for url in strings_under(source, "registry")})
+
+
+def config_sources(data: dict) -> set[str]:
+    """The URLs a `.cargo/config` or `.cargo/config.toml` names: what a manifest would, and the
+    `index` of `[registry]` and of every `[registries.*]`, where a dependency's `registry` name leads."""
+    indexes = (data.get(key) for key in ("registry", "registries"))
+    return manifest_sources(data) | {url for found in indexes for url in strings_under(found, "index")}
 
 
 def lock_url(source: str) -> str:
-    """The URL of a Cargo.lock source, without its kind (`git+`, `registry+`, `sparse+`), query
-    or fragment."""
+    """The URL of a Cargo.lock source without its kind (`git+`, `registry+`, `sparse+`), query or fragment."""
     url = source.partition("+")[2] or source
     return re.split(r"[?#]", url, maxsplit=1)[0]
 
@@ -155,31 +163,35 @@ def lock_sources(data: dict) -> set[str]:
     return {lock_url(source) for source in sources if source not in CRATES_IO}
 
 
-SOURCE_READERS = {"Cargo.toml": manifest_sources, "Cargo.lock": lock_sources}
+SOURCE_READERS = {"Cargo.toml": manifest_sources, "Cargo.lock": lock_sources,
+                  ".cargo/config": config_sources, ".cargo/config.toml": config_sources}
+
+
+def source_reader(path: str) -> Callable[[dict], set[str]] | None:
+    """How the sources of `path` are read, by its name or, for a cargo config, its last two parts."""
+    parts = PurePosixPath(path).parts
+    return SOURCE_READERS.get("/".join(parts[-2:])) or SOURCE_READERS.get(parts[-1])
 
 
 @dataclass(frozen=True)
 class CargoSources:
-    """The URLs the change's Cargo.toml and Cargo.lock files add, sorted and redacted, and why a
-    file of theirs could not be read after the change: one that cannot be read may name any
-    source, so it is asked about like a new one."""
+    """The URLs the change's Cargo files (`source_reader`) add, sorted and redacted, and why one
+    could not be read after the change: one that cannot be read may name any source, so it is
+    asked about like a new one."""
 
     urls: tuple[str, ...] = ()
     unreadable: tuple[str, ...] = ()
 
 
 def source_urls(files: dict[str, str], side: str) -> tuple[set[str], tuple[str, ...]]:
-    """The URLs the Cargo.toml and Cargo.lock files among `files` (path -> text) name, and why a
-    file could not be parsed. A leading UTF-8 byte order mark is dropped, as cargo drops it."""
+    """The URLs the Cargo files among `files` (path -> text) name, and why one could not be parsed."""
     found, errors = set(), []
     for path, text in sorted(files.items()):
-        read = SOURCE_READERS.get(PurePosixPath(path).name)
-        if read is None:
-            continue
-        try:
-            found |= read(tomllib.loads(text.removeprefix("\ufeff")))
-        except tomllib.TOMLDecodeError as error:
-            errors.append(f"{path} {side} is not valid TOML: {error}")
+        if read := source_reader(path):
+            try:
+                found |= read(toml(text, f"{path} {side}"))
+            except ValueError as error:
+                errors.append(str(error))
     return found, tuple(errors)
 
 
@@ -192,9 +204,8 @@ def read_cargo_sources(old: dict[str, str], new: dict[str, str]) -> CargoSources
 
 
 def cargo_sources(old: dict[str, str], new: dict[str, str]) -> tuple[str, ...]:
-    """The URLs the Cargo.toml and Cargo.lock files name after the change and not before (path ->
-    text on each side), sorted, each URL's credentials redacted: where cargo-deny would download
-    from for the first time."""
+    """The URLs the Cargo files name after the change and not before (path -> text on each side),
+    sorted, credentials redacted: where cargo-deny would download from for the first time."""
     return read_cargo_sources(old, new).urls
 
 
@@ -378,14 +389,10 @@ def dependency_diffs(change: Change, root: Path, paths: list[str]) -> tuple[Pack
     return cargo, declared_diff
 
 
-def is_cargo_file(path: str) -> bool:
-    return PurePosixPath(path).name in SOURCE_READERS
-
-
 def new_cargo_sources(change: Change, root: Path, paths: list[str]) -> CargoSources:
-    """The sources the Cargo.toml and Cargo.lock files among the touched `paths` add, and the ones
-    that cannot be read after the change, not UTF-8 or not TOML."""
-    cargo = [path for path in paths if is_cargo_file(path)]
+    """The sources the Cargo files among the touched `paths` add, and the ones that cannot be read
+    after the change, not UTF-8 or not TOML."""
+    cargo = [path for path in paths if source_reader(path)]
     if not cargo:
         return CargoSources()
     old, new = both_ends(change, root, cargo)

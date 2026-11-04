@@ -168,6 +168,25 @@ class CargoSources(unittest.TestCase):
     def test_a_bom_manifest_names_its_sources(self):
         self.assertEqual(deps.cargo_sources({}, {"Cargo.toml": "\ufeff" + PATCHED}), ("https://evil/x",))
 
+    def test_registry_index_source(self):
+        manifest = '[dependencies]\nfoo = { version = "1", registry-index = "sparse+https://evil/index/" }\n'
+        self.assertEqual(deps.cargo_sources({}, {"Cargo.toml": manifest}), ("sparse+https://evil/index/",))
+        nested = '[target.\'cfg(unix)\'.build-dependencies]\nfoo = { version = "1", registry-index = "https://e/i" }\n'
+        self.assertEqual(deps.cargo_sources({}, {"crates/x/Cargo.toml": nested}), ("https://e/i",))
+
+    def test_a_cargo_config_resolves_registry_names(self):
+        config = ('[registries.internal]\nindex = "sparse+https://evil/index/"\n\n'
+                  '[registry]\nindex = "https://evil/default"\n\n[source.mirror]\nregistry = "https://g/m"\n')
+        expected = ("https://evil/default", "https://g/m", "sparse+https://evil/index/")
+        for path in (".cargo/config.toml", ".cargo/config", "crates/x/.cargo/config.toml"):
+            with self.subTest(path=path):
+                self.assertEqual(deps.cargo_sources({}, {path: config}), expected)
+        self.assertEqual(deps.cargo_sources({}, {"config.toml": config, "x/cargo/config": config}), ())
+        self.assertEqual(deps.cargo_sources({".cargo/config.toml": config}, {".cargo/config": config}), ())
+
+    def test_toml_drops_a_byte_order_mark(self):
+        self.assertEqual(deps.toml('\ufeffa = "b"\n', "x.toml"), {"a": "b"})
+
     def test_an_unparseable_file_on_the_new_side_is_unreadable(self):
         found = deps.read_cargo_sources({"Cargo.toml": PATCHED}, {"Cargo.toml": "garbage [[", "Cargo.lock": NEW_LOCK})
         (error,) = found.unreadable
