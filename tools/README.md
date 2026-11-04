@@ -27,12 +27,15 @@ hand-written measurements. CONTRIBUTING.md (Complexity) explains the targets and
 The container `make sandbox` builds and tests in. `Dockerfile` is the pinned image, and
 `Dockerfile.viewer` the viewer image built on it (`make sandbox-image-viewer`, run with
 `IMAGE=viewer`): `viewer_image.py` derives its build arguments and tag from the repository's wasm
-and Playwright pins, and `playwright.txt` locks the Playwright it installs the browser with. `sandbox.py`
+and Playwright pins and the digest of the installed Chromium tree (modes and symbolic links
+included), and `playwright.txt` locks the Playwright it installs the browser with. `sandbox.py`
 is the runner; its parts are `layout.py` (which paths are read-only, masked or hidden),
 `storage.py` (the storage on the host and `make sandbox-clean`), `arguments.py` (the `docker run`
 arguments of each phase, for either image), `lifecycle.py` (the daemon, the limits, one container's run and kill)
 and `audit.py` (what a run changed or left in the checkout, and the record that blocks the next
-start until it is gone). `isolation-check.sh` runs inside the
+start until it is gone). `guard.py` reads that record for `make/common.mk`: the top-level host
+`make` refuses while a path it names is unreviewed. `rust_version.py` reads the Rust version of the
+image from `rust-toolchain.toml`. `isolation-check.sh` runs inside the
 container for `make sandbox-check`. `audit-tools-check.sh` is `make sandbox-tools-check`: it fetches
 the advisory database and checks a scratch crate with the image's cargo-deny. `sandbox_pr.py` is
 `make sandbox-pr`: `source.py` makes the clone of a pull request or a ref with git isolated from
