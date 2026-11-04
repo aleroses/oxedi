@@ -45,12 +45,22 @@ def cache_root(env: dict[str, str]) -> Path:
     return base / "oxedi-sandbox"
 
 
+def own_dir(cache: Path, root: Path) -> Path:
+    """The storage of the checkout at `root`."""
+    return cache / path_hash(root)
+
+
+def record_for(cache: Path, root: Path) -> Path:
+    """Where the last dirty audit of the checkout at `root` is recorded."""
+    return own_dir(cache, root) / "audit.json"
+
+
 def storage_for(cache: Path, checkout: Checkout) -> Storage:
     refuse_unsafe(cache, "storage")
-    own = cache / path_hash(checkout.root)
+    own = own_dir(cache, checkout.root)
     return Storage(
         cache, cache / "cargo", cache / "uv", own / "target", own / "venv", own / "venv-docs",
-        own / "viewer-pkg", own / "empty", own / "audit.json",
+        own / "viewer-pkg", own / "empty", record_for(cache, checkout.root),
     )
 
 

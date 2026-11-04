@@ -204,7 +204,8 @@ class Audit(World):
         self.assertIn("Error 3", first.stderr)
         second = self.make(checkout, "sandbox", "CMD=true")
         self.assertEqual(second.returncode, 2, second.stderr)
-        self.assertIn("sandbox: refused: the last run left hashlib.py, still as it left them;", second.stderr)
+        # The host make stops at the guard, before the runner starts.
+        self.assertIn("*** make: a sandbox run left hashlib.py unreviewed;", second.stderr)
         self.assertFalse((self.tmp / "marker").exists())
 
     def test_a_module_in_the_checkout_never_shadows_the_runners(self):

@@ -51,3 +51,19 @@ define check-generated
   | diff -u $(3) - \
   || { echo "$(1): $(3) is stale; run make $(4)"; exit 1; }
 endef
+
+# The sandbox guard
+
+# While the last sandbox run's leftovers are unreviewed (tools/sandbox/guard.py says which), the
+# top-level make stops with the guard's line before any recipe runs, whatever the goal, except help
+# and sandbox-clean, which inspect or forget the record. A sub-make was started by a make that
+# passed the guard. A host without $(PYTHON_BIN) never ran the sandbox (its runner needs it), so it
+# holds no record to check.
+ifeq ($(filter-out 0,$(MAKELEVEL)),)
+ifneq ($(filter-out help sandbox-clean,$(or $(MAKECMDGOALS),$(.DEFAULT_GOAL),help)),)
+SANDBOX_GUARD := $(shell if command -v $(PYTHON_BIN) > /dev/null 2>&1; then $(PYTHON_BIN) -I '$(CURDIR)/tools/sandbox/guard.py' --checkout '$(CURDIR)' 2>&1; fi)
+ifneq ($(SANDBOX_GUARD),)
+$(error $(SANDBOX_GUARD))
+endif
+endif
+endif
