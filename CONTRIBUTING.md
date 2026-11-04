@@ -402,7 +402,10 @@ are read from the command line only, like `IMAGE`: one left in your shell is ref
 and one line before any docker command, for example `sandbox-pr: CONFIRM is read from the command
 line only; pass it as make sandbox-pr CONFIRM=yes`. GNU make takes a variable assigned in an
 exported `MAKEFLAGS` or `GNUMAKEFLAGS` as one from the command line, so the top-level make refuses
-those too, `IMAGE` included, naming the variable and saying to unset the one that holds it.
+those too, `IMAGE` included, naming the variable and saying to unset the one that holds it. On Linux
+the check reads the environment make started with, from `/proc`; on another host with GNU make 4.4
+or later, an assignment in an exported `MAKEFLAGS` cannot be told apart from the command line, so
+there only the origin check holds.
 
 **What the container is.** A pinned image (`tools/sandbox/Dockerfile`: Ubuntu 24.04, the Rust
 version CI gates with as `ARG RUST_VERSION`, CPython 3.11 and 3.13, uv, cargo-deny and pip-audit;

@@ -58,6 +58,9 @@ endef
 # variable of $(2) that the environment's MAKEFLAGS or GNUMAKEFLAGS assigns. The environment make
 # started with is read from /proc (make 4.4 gives $(shell) its own MAKEFLAGS, with the command
 # line's variables), else from the shell when that sees make's starting environment (MAKELEVEL unset).
+# On Linux the check reads the environment make started with, from `/proc`; on another host with GNU
+# make 4.4 or later, an assignment in an exported `MAKEFLAGS` cannot be told apart from the command
+# line, so there only the origin check holds.
 # The value only feeds $(filter), never the recipe.
 define SANDBOX_STARTING_ENV
 $(shell { if [ -r /proc/$$PPID/environ ]; then tr '\0' '\n' < /proc/$$PPID/environ; elif [ "$${MAKELEVEL:-0}" = 0 ]; then env; fi; } | sed -n 's/^$(1)=//p')

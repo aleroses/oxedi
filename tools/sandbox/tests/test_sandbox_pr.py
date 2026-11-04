@@ -156,7 +156,7 @@ class Flow(unittest.TestCase):
                               "0xff in position 0: invalid start byte; fix the file or rebase the change on master\n")
 
     def test_a_bom_pyproject_with_the_group_is_not_refused(self):
-        self.change("crates/oxedi_py/pyproject.toml", "﻿" + PYPROJECT)
+        self.change("crates/oxedi_py/pyproject.toml", "\ufeff" + PYPROJECT)
         status, _, err = self.review(SANDBOX_CONFIRM="yes")
         self.assertEqual(status, 0, err)
         self.assertNotIn("dependency group", err)
