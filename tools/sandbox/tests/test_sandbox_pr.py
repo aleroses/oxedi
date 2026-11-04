@@ -252,6 +252,39 @@ class Flow(unittest.TestCase):
         text = (self.reviews() / f"ref-feature-{report['change']['tested'][:12]}" / "report.txt").read_text()
         self.assertTrue(text.endswith(f"\n{hint}\n"), text)
 
+    def test_flow_asks_before_deny(self):
+        self.change("Cargo.toml", '[package]\nname = "w"\n\n[patch.crates-io]\nx = { git = "https://evil/x" }\n')
+        status, out, err = self.review()
+        self.assertEqual(status, 4, err)
+        self.assertEqual(self.runs(), [])
+        self.assertIn("sandbox-pr: the change adds a cargo source: https://evil/x\n", err)
+        self.assertIn(
+            "sandbox-pr: cargo-deny would fetch from a source the change adds; there is no terminal to ask, so it "
+            "stops with exit 4: read the report, then set CONFIRM=yes to go on\n", err)
+        self.assertIn("new cargo sources:\n  https://evil/x\n", out)
+        self.assertIn("cargo-deny: not run\n", self.review_text())
+        report = self.report()
+        self.assertEqual((report["new_sources"], report["confirmed"]), (["https://evil/x"], "refused"))
+        self.assertEqual((report["cargo_deny"], report["pip_audit"], report["run"]), (None, [], None))
+        (self.fake / "calls.jsonl").unlink()
+        status, _, err = self.review(SANDBOX_CONFIRM="yes")
+        self.assertEqual(status, 0, err)
+        self.assertEqual(self.kinds(), ["deny", "fetch", "fetch", "fetch", "pip-audit", "run"])
+        self.assertEqual(self.report()["confirmed"], "env")
+
+    def test_no_new_source_asks_nothing_before_deny(self):
+        self.change("crates/oxedi_core/src/lib.rs", "pub fn g() {}\n")
+        status, out, err = self.review()
+        self.assertEqual(status, 0, err)
+        self.assertNotIn("cargo source", err)
+        self.assertIn("new cargo sources:\n  none\n", out)
+        self.assertEqual(self.report()["new_sources"], [])
+
+    def review_text(self) -> str:
+        found = sorted(self.reviews().glob("ref-feature-*/report.txt"))
+        self.assertEqual(len(found), 1, found)
+        return found[0].read_text()
+
     def test_deny_toml_comes_from_the_host(self):
         self.change("tools/sandbox/deny.toml", "[advisories]\nignore = ['RUSTSEC-0000-0000']\n")
         status, _, err = self.review(SANDBOX_CONFIRM="yes")

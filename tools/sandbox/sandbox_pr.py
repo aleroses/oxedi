@@ -3,11 +3,12 @@
 host checkout, without running any of it on the host.
 
 The flow: a throwaway clone made with git isolated from the host's configuration; a risk report
-made from the diff alone (the paths that let a change run code or steer a tool, and the packages
-it adds or changes); cargo-deny over its Cargo.lock in an audit container; a confirmation when
-something is flagged or cargo-deny failed; the fetch; pip-audit over the wheels the fetch
-installed, and a second confirmation when it failed; then the target in the run phase, with no
-network, and the audit of the clone. A text and a JSON report go next to the clone, in
+made from the diff alone (the paths that let a change run code or steer a tool, the packages it
+adds or changes, and the cargo sources it adds); a confirmation when it adds a cargo source;
+cargo-deny over its Cargo.lock in an audit container; a confirmation when something is flagged or
+cargo-deny failed; the fetch; pip-audit over the wheels the fetch installed, and a second
+confirmation when it failed; then the target in the run phase, with no network, and the audit of
+the clone. A text and a JSON report go next to the clone, in
 ${XDG_CACHE_HOME:-~/.cache}/oxedi-sandbox/prs/<id>-<sha12>/. Nothing is published.
 
 The rules come from the checkout that runs this script, never from the change: this script and
@@ -40,11 +41,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from arguments import VENVS, ImageKind, Phase, deny_command, pip_audit_command  # noqa: E402
 from audit import DIRTY_STATUS  # noqa: E402
+from deps import dependency_diffs, new_cargo_sources  # noqa: E402
 from layout import SandboxError, container_name  # noqa: E402
 from lifecycle import refuse_if_running, run_container  # noqa: E402
-from deps import dependency_diffs  # noqa: E402
 from report import (  # noqa: E402
-    Confirmed, Progress, Ran, Report, Tool, VenvAudit, hint_lines, pip_audit_lines, risk_lines, tool_lines,
+    Confirmed, Progress, Ran, Report, Tool, VenvAudit, deny_lines, hint_lines, pip_audit_lines, risk_lines,
     write_reports,
 )
 from risk import Risk, image_hint, touched  # noqa: E402
@@ -142,8 +143,9 @@ def fresh_clone(cache: Path, source: Path, request: Request) -> tuple[Change, Pa
 
 def assess(change: Change, root: Path) -> Risk:
     paths = touched(change, root)
-    cargo, python = dependency_diffs(change, root, [t.path for t in paths])
-    return Risk(tuple(paths), cargo, python)
+    names = [t.path for t in paths]
+    cargo, python = dependency_diffs(change, root, names)
+    return Risk(tuple(paths), cargo, python, new_cargo_sources(change, root, names))
 
 
 def audit_tool(plan: Plan, command: list[str]) -> Tool:
@@ -188,14 +190,27 @@ def first_gate(risk: Risk, deny: Tool) -> tuple[bool, str]:
     return bool(reasons), " and ".join(reasons)
 
 
+def source_gate(risk: Risk, settings: Settings) -> Confirmed:
+    """Asks before cargo-deny, which resolves the change's manifests, reaches a source the change
+    adds; each source on its own line first."""
+    for url in risk.new_sources:
+        print(f"sandbox-pr: the change adds a cargo source: {url}", file=sys.stderr)
+    return confirm(bool(risk.new_sources), "cargo-deny would fetch from a source the change adds", settings)
+
+
 def stages(plan: Plan, risk: Risk, settings: Settings, risk_text: list[str]) -> Progress:
-    """The containers in order, each confirmation before what it guards: cargo-deny, the first
-    confirmation, the fetch, pip-audit, the second confirmation, the run. Each part of the report
-    is printed before the confirmation that rests on it."""
+    """The containers in order, each confirmation before what it guards: the new-source
+    confirmation, cargo-deny, the first confirmation, the fetch, pip-audit, the second
+    confirmation, the run. Each part of the report is printed before the confirmation that rests
+    on it."""
+    print("\n".join(risk_text), flush=True)
+    answers = (source_gate(risk, settings),)
+    if Confirmed.REFUSED in answers:
+        return Progress(NOT_CONFIRMED_STATUS, None, (), answers, False)
     plan.storage.advisory.mkdir(mode=0o700, parents=True, exist_ok=True)
     deny = audit_tool(plan, deny_command())
-    print("\n".join(risk_text + tool_lines("cargo-deny", deny.status, deny.output)), flush=True)
-    answers = (confirm(*first_gate(risk, deny), settings),)
+    print("\n".join(deny_lines(deny)), flush=True)
+    answers += (confirm(*first_gate(risk, deny), settings),)
     if Confirmed.REFUSED in answers:
         return Progress(NOT_CONFIRMED_STATUS, deny, (), answers, False)
     fetched = fetch_phase(plan)

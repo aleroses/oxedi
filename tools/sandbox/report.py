@@ -55,12 +55,12 @@ class Ran:
 
 @dataclass(frozen=True)
 class Progress:
-    """How far the containers went. `pip_audit` holds one entry per venv of the image, none when the
-    flow stopped before the fetch or the fetch failed; `ran` is false when the run phase never
-    started."""
+    """How far the containers went. `cargo_deny` is None when the flow stopped before it;
+    `pip_audit` holds one entry per venv of the image, none when the flow stopped before the fetch
+    or the fetch failed; `ran` is false when the run phase never started."""
 
     status: int
-    cargo_deny: Tool
+    cargo_deny: Tool | None
     pip_audit: tuple[VenvAudit, ...]
     answers: tuple[Confirmed, ...]
     ran: bool
@@ -99,6 +99,10 @@ def tool_lines(name: str, status: int, output: str) -> list[str]:
     return [f"{name}: exit {status}", *(f"  {line}" for line in output.splitlines())]
 
 
+def deny_lines(deny: Tool | None) -> list[str]:
+    return ["cargo-deny: not run"] if deny is None else tool_lines("cargo-deny", deny.status, deny.output)
+
+
 def pip_audit_lines(audits: tuple[VenvAudit, ...]) -> list[str]:
     if not audits:
         return ["pip-audit: not run"]
@@ -117,6 +121,7 @@ def risk_lines(request: Request, change: Change, risk: Risk) -> list[str]:
         lines += [f"      {kind.name}: {kind.why}" for kind in item.kinds]
     lines += package_lines("Cargo.lock packages", risk.cargo)
     lines += package_lines("declared Python packages", risk.python)
+    lines += ["new cargo sources:", *(f"  {url}" for url in risk.new_sources or ("none",))]
     return lines + [f"flagged: {'yes' if risk.flagged else 'no'}"]
 
 
@@ -132,7 +137,7 @@ def render(report: Report) -> list[str]:
         f"run: {run.target}: exit {run.status}", *(f"  audit: {line}" for line in run.audit or ("clean",))]
     return [
         *risk_lines(report.request, report.change, report.risk),
-        *tool_lines("cargo-deny", outcome.cargo_deny.status, outcome.cargo_deny.output),
+        *deny_lines(outcome.cargo_deny),
         *pip_audit_lines(outcome.pip_audit),
         f"confirmed: {combined(list(outcome.answers)).value}",
         *run_lines,
@@ -156,7 +161,8 @@ def report_json(report: Report) -> dict:
                     for t in report.risk.touched],
         "cargo": packages_json(report.risk.cargo),
         "python": packages_json(report.risk.python),
-        "cargo_deny": asdict(outcome.cargo_deny),
+        "new_sources": list(report.risk.new_sources),
+        "cargo_deny": None if outcome.cargo_deny is None else asdict(outcome.cargo_deny),
         "pip_audit": [asdict(audit) for audit in outcome.pip_audit],
         "flagged": report.risk.flagged,
         "confirmed": combined(list(outcome.answers)).value,

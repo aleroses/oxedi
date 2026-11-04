@@ -21,6 +21,9 @@ from source import Change, git_bytes, git_text, redacted
 NO_SOURCE = "local"
 # A PEP 508 name, then nothing or what may follow a name: extras, a version, markers or `@ url`.
 REQUIREMENT = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*((?:[\[(<>=!~;@].*)?)")
+# The Cargo.lock sources of crates.io, the registry cargo-deny reaches anyway, matched whole so a
+# look-alike such as `...crates.io-index.example` is a new source.
+CRATES_IO = frozenset({"registry+https://github.com/rust-lang/crates.io-index", "sparse+https://index.crates.io/"})
 # The `[tool.uv]` keys that name where packages are downloaded from.
 UV_INDEX_KEYS = ("index", "extra-index-url", "index-url", "find-links")
 
@@ -113,6 +116,68 @@ def cargo_lock_diff(old: str, new: str, path: str = "Cargo.lock") -> PackageDiff
         return PackageDiff(errors=(str(error),))
     names = before.keys() | after.keys()
     return total(compare_versions(name, before.get(name, set()), after.get(name, set())) for name in names)
+
+
+def strings_under(value: object, key: str) -> Iterator[str]:
+    """Every string `key` holds in a TOML value, at any depth."""
+    if isinstance(value, dict):
+        for name, item in value.items():
+            if name == key and isinstance(item, str):
+                yield item
+            else:
+                yield from strings_under(item, key)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings_under(item, key)
+
+
+def manifest_sources(data: dict) -> set[str]:
+    """The URLs a Cargo.toml names: every `git`, in a dependency table of any kind or target, in
+    `[patch.*]`, `[replace]` or `[source.*]`, and the `registry` of a `[source.*]` table (a
+    dependency's `registry` is a name, not a URL)."""
+    sources = data.get("source", {})
+    tables = sources.values() if isinstance(sources, dict) else ()
+    return set(strings_under(data, "git")) | {url for source in tables for url in strings_under(source, "registry")}
+
+
+def lock_url(source: str) -> str:
+    """The URL of a Cargo.lock source, without its kind (`git+`, `registry+`, `sparse+`), query
+    or fragment."""
+    url = source.partition("+")[2] or source
+    return re.split(r"[?#]", url, maxsplit=1)[0]
+
+
+def lock_sources(data: dict) -> set[str]:
+    """The URLs of the Cargo.lock packages that do not come from crates.io."""
+    packages = data.get("package", [])
+    sources = strings_under(packages if isinstance(packages, list) else [], "source")
+    return {lock_url(source) for source in sources if source not in CRATES_IO}
+
+
+SOURCE_READERS = {"Cargo.toml": manifest_sources, "Cargo.lock": lock_sources}
+
+
+def source_urls(files: dict[str, str]) -> set[str]:
+    """The URLs the Cargo.toml and Cargo.lock files among `files` (path -> text) name. A file that
+    does not parse names none: cargo refuses it, so cargo-deny reaches nothing through it, and it is
+    already a manifest or a Cargo.lock finding."""
+    found = set()
+    for path, text in files.items():
+        read = SOURCE_READERS.get(PurePosixPath(path).name)
+        if read is None:
+            continue
+        try:
+            found |= read(tomllib.loads(text))
+        except tomllib.TOMLDecodeError:
+            continue
+    return found
+
+
+def cargo_sources(old: dict[str, str], new: dict[str, str]) -> tuple[str, ...]:
+    """The URLs the Cargo.toml and Cargo.lock files name after the change and not before (path ->
+    text on each side), sorted, each URL's credentials redacted: where cargo-deny would download
+    from for the first time."""
+    return tuple(sorted({redacted(url) for url in source_urls(new) - source_urls(old)}))
 
 
 def requirement(line: str) -> tuple[str, str]:
@@ -293,3 +358,16 @@ def dependency_diffs(change: Change, root: Path, paths: list[str]) -> tuple[Pack
         old, new = both_ends(change, root, python)
         declared_diff = total([declared_python_diff(old.files, new.files), PackageDiff(errors=old.errors + new.errors)])
     return cargo, declared_diff
+
+
+def is_cargo_file(path: str) -> bool:
+    return PurePosixPath(path).name in SOURCE_READERS
+
+
+def new_cargo_sources(change: Change, root: Path, paths: list[str]) -> tuple[str, ...]:
+    """The sources the Cargo.toml and Cargo.lock files among the touched `paths` add."""
+    cargo = [path for path in paths if is_cargo_file(path)]
+    if not cargo:
+        return ()
+    old, new = both_ends(change, root, cargo)
+    return cargo_sources(old.files, new.files)

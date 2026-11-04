@@ -173,6 +173,8 @@ class Risk:
     touched: tuple[Touched, ...]
     cargo: PackageDiff
     python: PackageDiff
+    # The URLs the change's Cargo.toml and Cargo.lock files add, sorted.
+    new_sources: tuple[str, ...]
 
     @property
     def flagged(self) -> bool:

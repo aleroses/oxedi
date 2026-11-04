@@ -121,6 +121,55 @@ class Cargo(unittest.TestCase):
         ))
 
 
+PATCHED = '[package]\nname = "w"\n\n[patch.crates-io]\nx = { git = "https://evil/x" }\n'
+
+
+class CargoSources(unittest.TestCase):
+    def test_patch_git_source(self):
+        self.assertEqual(deps.cargo_sources({}, {"Cargo.toml": PATCHED}), ("https://evil/x",))
+
+    def test_registry_only(self):
+        new = OLD_LOCK.replace('version = "1.0.0"', 'version = "1.0.1"')
+        sparse = new.replace(REGISTRY, "sparse+https://index.crates.io/")
+        self.assertEqual(deps.cargo_sources({"Cargo.lock": OLD_LOCK}, {"Cargo.lock": new}), ())
+        self.assertEqual(deps.cargo_sources({"Cargo.lock": OLD_LOCK}, {"Cargo.lock": sparse}), ())
+
+    def test_every_place_a_manifest_names_a_source(self):
+        manifest = (
+            '[dependencies]\na = { git = "https://g/a", branch = "main" }\n\n'
+            '[target.\'cfg(unix)\'.dev-dependencies]\nb = { git = "https://g/b" }\n\n'
+            '[workspace.dependencies]\nc = { git = "https://g/c" }\n\n'
+            '[replace]\n"d:1.0.0" = { git = "https://g/d" }\n\n'
+            '[source.mirror]\nregistry = "https://g/index"\n\n'
+            '[source.vendored]\ngit = "https://g/vendored"\n\n'
+            '[build-dependencies]\ne = { version = "1", registry = "internal" }\n'
+        )
+        self.assertEqual(deps.cargo_sources({}, {"crates/x/Cargo.toml": manifest}), (
+            "https://g/a", "https://g/b", "https://g/c", "https://g/d", "https://g/index", "https://g/vendored"))
+
+    def test_lock_sources_from_elsewhere(self):
+        found = deps.cargo_sources({"Cargo.lock": OLD_LOCK}, {"Cargo.lock": NEW_LOCK})
+        self.assertEqual(found, ("https://github.com/example/c",))
+        other = OLD_LOCK.replace(REGISTRY, "registry+https://evil/index", 1)
+        self.assertEqual(deps.cargo_sources({"Cargo.lock": OLD_LOCK}, {"Cargo.lock": other}), ("https://evil/index",))
+        lookalike = OLD_LOCK.replace(REGISTRY, f"{REGISTRY}.evil.example", 1)
+        self.assertEqual(deps.cargo_sources({"Cargo.lock": OLD_LOCK}, {"Cargo.lock": lookalike}),
+                         ("https://github.com/rust-lang/crates.io-index.evil.example",))
+
+    def test_credentials_are_redacted(self):
+        manifest = '[dependencies]\na = { git = "https://user:tok@g/a" }\n'
+        self.assertEqual(deps.cargo_sources({}, {"Cargo.toml": manifest}), ("https://<redacted>@g/a",))
+
+    def test_a_source_already_there_is_not_new(self):
+        old = {"Cargo.toml": PATCHED, "Cargo.lock": NEW_LOCK}
+        self.assertEqual(deps.cargo_sources(old, dict(old)), ())
+        moved = {"crates/y/Cargo.toml": PATCHED, "Cargo.lock": NEW_LOCK}
+        self.assertEqual(deps.cargo_sources(old, moved), ())
+
+    def test_an_unparseable_file_names_no_source(self):
+        self.assertEqual(deps.cargo_sources({}, {"Cargo.toml": "garbage [[", "Cargo.lock": "package = 1\n"}), ())
+
+
 class Python(unittest.TestCase):
     def test_python_declared_include_group(self):
         diff = deps.declared_python_diff({PYPROJECT: pyproject("pyarrow>=14")}, {PYPROJECT: pyproject("pyarrow>=15")})
