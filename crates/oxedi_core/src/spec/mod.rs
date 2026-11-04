@@ -19,7 +19,7 @@
 //! `tables`, `balance` and `summaries` hold the definitions,
 //! `occurrence_error`, `table_error`, `balance_error` and `summary_error` why
 //! an occurrence, a table, a balancing rule or a summary is rejected; `raw`
-//! the deserialization shapes; `schema` the JSON shape as data and `shape`
+//! the deserialization shapes; `sections` the JSON shape as data and `shape`
 //! the walk that checks a value against it; `build` the construction of a
 //! [`Spec`] as a pipeline of steps, `build_loops` the compilation of one loop,
 //! `compile` that of the tables and `columns` that of one table column;
@@ -46,7 +46,7 @@ mod patch;
 mod phi;
 mod raw;
 mod render;
-mod schema;
+mod sections;
 mod segments;
 mod shape;
 mod summaries;

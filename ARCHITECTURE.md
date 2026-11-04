@@ -119,7 +119,7 @@ The spec files live in `crates/oxedi_core/specs/`:
 
 Loading goes `Spec::from_json` → `Spec::from_value` (`spec/build.rs`):
 
-1. `shape.rs` checks the JSON shape against `schema.rs`, the schema as data: one table of
+1. `shape.rs` checks the JSON shape against `sections.rs`, the schema as data: one table of
    keys per object, the root's rows being the sections. Its errors name the key path as
    written and, for an unknown key, the keys allowed there.
 2. `raw.rs` deserializes each entry into serde structs (`RawSpec`, `RawLoop`, …).
