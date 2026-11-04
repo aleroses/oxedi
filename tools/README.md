@@ -36,8 +36,11 @@ start until it is gone). `isolation-check.sh` runs inside the
 container for `make sandbox-check`. `audit-tools-check.sh` is `make sandbox-tools-check`: it fetches
 the advisory database and checks a scratch crate with the image's cargo-deny. `sandbox_pr.py` is
 `make sandbox-pr`: `source.py` makes the clone of a pull request or a ref with git isolated from
-the host's configuration, `risk.py` lists the paths and the dependencies the change touches
-without running any of it (and whether the base image can run its tests), and the flow reuses `sandbox.py`'s plan and phases, adding the audit
+the host's configuration, `risk.py` classifies the paths the change touches and decides whether
+it needs a confirmation (and whether the base image can run its tests), `deps.py` diffs the
+dependencies and the sources it adds (Cargo and Python, uv sources included), `report.py` renders
+`report.txt` and `report.json` and holds the progress and confirmation types, all without running
+any of it, and the flow reuses `sandbox.py`'s plan and phases, adding the audit
 containers (cargo-deny and pip-audit, with the host's `deny.toml`), the confirmations and the
 reports. `malicious-pr.sh` is `make sandbox-pr-check`: it plants the probes of `tests/malicious/`
 in a temporary clone and reviews it for real. `tests/sandbox.sh` runs the runner's tests against a fake

@@ -397,7 +397,15 @@ make sandbox-clean                # remove this checkout's storage; ALL=1 remove
 ```
 
 `CMD` reaches the container's `bash -c` as written, with no other quoting layer; `$$` is a
-literal `$`.
+literal `$`. `CMD` for `sandbox`, and `PR`, `REF`, `HEAD`, `TARGET` and `CONFIRM` for `sandbox-pr`,
+are read from the command line only, like `IMAGE`: one left in your shell is refused with exit 2
+and one line before any docker command, for example `sandbox-pr: CONFIRM is read from the command
+line only; pass it as make sandbox-pr CONFIRM=yes`. GNU make takes a variable assigned in an
+exported `MAKEFLAGS` or `GNUMAKEFLAGS` as one from the command line, so the top-level make refuses
+those too, `IMAGE` included, naming the variable and saying to unset the one that holds it. On Linux
+the check reads the environment make started with, from `/proc`; on another host with GNU make 4.4
+or later, an assignment in an exported `MAKEFLAGS` cannot be told apart from the command line, so
+there only the origin check holds.
 
 **What the container is.** A pinned image (`tools/sandbox/Dockerfile`: Ubuntu 24.04, the Rust
 version CI gates with as `ARG RUST_VERSION`, CPython 3.11 and 3.13, uv, cargo-deny and pip-audit;
@@ -511,8 +519,9 @@ make sandbox-pr PR=251 CONFIRM=yes             # go on without asking when somet
 make sandbox-pr PR=251 IMAGE=viewer TARGET="make viewer-test"   # in the viewer image
 ```
 
-It clones this checkout into a throwaway directory and fetches the pull request anonymously over
-HTTPS from the GitHub repository your `origin` names. With `PR`, it tests the merge ref; when
+Those variables are read from the command line only, as the `sandbox` section says. It clones
+this checkout into a throwaway directory and fetches the pull request anonymously over HTTPS from
+the GitHub repository your `origin` names. With `PR`, it tests the merge ref; when
 there is none (the pull request has conflicts or is closed), it refuses and says to set `HEAD=1`.
 Every `git` it runs on the clone runs without your global and system git configuration, hooks,
 attributes file or file transport, so a filter or hook the change names never runs on your
@@ -525,15 +534,29 @@ Then, in order:
    touches, flagged when it is a build script, a manifest or lock file, a file the host executes,
    a script, a test hook such as `conftest.py`, a procedural macro, documentation `make docs-test`
    runs, a binary, a symbolic link, a submodule or a `.gitattributes`; and the packages it adds,
-   changes or removes in `Cargo.lock` and in the declared Python dependencies.
-2. `cargo-deny` (advisories, sources, bans) over the change's `Cargo.lock`, in a container with
+   changes or removes in `Cargo.lock` and in the declared Python dependencies. The Python
+   diff covers `pyproject.toml` dependencies and dependency groups, `requirements*.txt`, and the
+   uv sources and package indexes (`[tool.uv.sources]`, `index-url` and the like), so a
+   dependency moved to a git URL or another index shows as changed.
+2. A confirmation before `cargo-deny`, which resolves the change's manifests and so can reach a
+   source the change adds: asked when the change adds a git or registry source (a `git` or
+   `registry-index` URL, a `[source.*]` registry, or a `[registries.*]` index that a dependency's
+   `registry` name leads to) to a `Cargo.toml`, a `Cargo.lock` or a `.cargo/config(.toml)` (each
+   URL is listed first), and when a Cargo file it touches cannot be read (not UTF-8 or not
+   TOML), because its sources cannot be checked. Same `y/N`, exit 4 and `CONFIRM=yes` as below.
+3. `cargo-deny` (advisories, sources, bans) over the change's `Cargo.lock`, in a container with
    the network and the checkout read-only.
-3. A confirmation when something is flagged or cargo-deny failed: `y/N` on a terminal; without
+4. A confirmation when something is flagged or cargo-deny failed: `y/N` on a terminal; without
    one it stops with exit 4 unless `CONFIRM=yes` is set.
-4. The fetch, then `pip-audit` over the wheels the fetch installed in each venv (`.venv`, and
+5. The fetch, then `pip-audit` over the wheels the fetch installed in each venv (`.venv`, and
    `.venv-docs` with `IMAGE=viewer`), and a second confirmation, asked the same way, when one of
    them failed.
-5. `TARGET` in the run phase, with no network, and the audit of the clone.
+6. `TARGET` in the run phase, with no network, and the audit of the clone.
+
+Before any container, a change whose `crates/oxedi_py/pyproject.toml` has no `contributor`
+dependency group (a change not rebased on `master`) is refused with
+`sandbox-pr: the change's crates/oxedi_py/pyproject.toml has no "contributor" dependency group,
+which the fetch installs; rebase the change on master`, instead of failing in the fetch.
 
 The rules come from your checkout, never from the change: the scripts in `tools/sandbox/`, the
 list of flagged paths and the cargo-deny policy (`tools/sandbox/deny.toml`, mounted read-only into
@@ -547,6 +570,11 @@ directory and the clone's `target/` first, so no build output survives from one 
 comment, label, push or status reaches GitHub. Reviewed with the base image, a change that touches
 `viewer/` or `crates/oxedi_wasm/` gets a last line in `report.txt` (and `image_hint` in
 `report.json`) saying to rerun with `IMAGE=viewer`, since the base image cannot run its tests.
+`report.json` holds the change, the touched paths with their kinds, the `cargo` and `python`
+package diffs, `new_sources` (the sources the change adds) and `unreadable_cargo` (the Cargo files
+it touches that could not be read), both lists, then `cargo_deny`, `pip_audit`, `flagged`,
+`confirmed`, `run`, `image`, `runtime` and `image_hint`. `cargo_deny` and
+`run` are `null` when that step did not run (a refusal before it), and `pip_audit` is `[]`.
 
 The exit status is that of `make sandbox` (the command's, 2 refused, 3 dirty audit, 124 timeout,
 130 and 143 on a signal), the fetch's when the fetch failed, and 4 when a confirmation was needed

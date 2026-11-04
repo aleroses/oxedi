@@ -22,6 +22,7 @@ from test_source import FILE_TRANSPORT, commit, git, new_repo  # noqa: E402
 
 IMAGE = "oxedi-sandbox:test"
 HOST_DENY = str(HERE.parent / "deny.toml")
+PYPROJECT = '[dependency-groups]\ncontributor = ["pytest"]\n'
 
 
 class Stdin:
@@ -68,10 +69,12 @@ class Flow(unittest.TestCase):
         self.host = new_repo(self.tmp / "host")
         (self.host / "tools" / "sandbox").mkdir(parents=True)
         (self.host / "crates" / "oxedi_core" / "src").mkdir(parents=True)
+        (self.host / "crates" / "oxedi_py").mkdir(parents=True)
         (self.host / ".gitignore").write_text("/target/\n/.venv/\n")
         git(self.host, "add", ".gitignore")
         commit(self.host, "tools/sandbox/deny.toml", "[bans]\n")
         commit(self.host, "crates/oxedi_core/src/lib.rs", "pub fn f() {}\n")
+        commit(self.host, "crates/oxedi_py/pyproject.toml", PYPROJECT)
         git(self.host, "checkout", "-q", "-b", "feature")
 
     def change(self, path: str, text: str = "x\n") -> None:
@@ -113,6 +116,50 @@ class Flow(unittest.TestCase):
         found = sorted(self.reviews().glob("ref-feature-*/report.json"))
         self.assertEqual(len(found), 1, found)
         return json.loads(found[0].read_text())
+
+    def test_pre_group_change_refused(self):
+        self.change("crates/oxedi_py/pyproject.toml", '[dependency-groups]\ndev = ["pytest"]\n')
+        status, out, err = self.review()
+        self.assertEqual(status, 2, err)
+        self.assertEqual(err, "sandbox-pr: the change's crates/oxedi_py/pyproject.toml has no \"contributor\" "
+                              "dependency group, which the fetch installs; rebase the change on master\n")
+        self.assertEqual(self.runs(), [])
+
+    def test_a_change_without_a_pyproject_is_refused(self):
+        git(self.host, "rm", "-q", "crates/oxedi_py/pyproject.toml")
+        git(self.host, "commit", "-q", "-m", "remove")
+        status, _, err = self.review()
+        self.assertEqual((status, self.runs()), (2, []))
+        self.assertEqual(err, 'sandbox-pr: the change has no crates/oxedi_py/pyproject.toml, which the fetch reads '
+                              'for the "contributor" dependency group; rebase the change on master\n')
+
+    def test_a_change_without_any_group_table_is_refused(self):
+        self.change("crates/oxedi_py/pyproject.toml", '[project]\nname = "x"\n')
+        status, _, err = self.review()
+        self.assertEqual((status, self.runs()), (2, []))
+        self.assertIn('has no "contributor" dependency group', err)
+
+    def test_a_pyproject_that_is_not_toml_is_refused_with_its_path(self):
+        self.change("crates/oxedi_py/pyproject.toml", "garbage [[\n")
+        status, _, err = self.review()
+        self.assertEqual((status, self.runs()), (2, []))
+        self.assertTrue(err.startswith("sandbox-pr: crates/oxedi_py/pyproject.toml is not valid TOML: "), err)
+        self.assertTrue(err.endswith("; fix the file or rebase the change on master\n"), err)
+
+    def test_a_pyproject_that_is_not_utf8_is_refused(self):
+        path = "crates/oxedi_py/pyproject.toml"
+        (self.host / path).write_bytes(b"\xff" + PYPROJECT.encode())
+        git(self.host, "commit", "-q", "-am", "latin")
+        status, _, err = self.review()
+        self.assertEqual((status, self.runs()), (2, []))
+        self.assertEqual(err, f"sandbox-pr: the change's {path} is not UTF-8 text: 'utf-8' codec can't decode byte "
+                              "0xff in position 0: invalid start byte; fix the file or rebase the change on master\n")
+
+    def test_a_bom_pyproject_with_the_group_is_not_refused(self):
+        self.change("crates/oxedi_py/pyproject.toml", "\ufeff" + PYPROJECT)
+        status, _, err = self.review(SANDBOX_CONFIRM="yes")
+        self.assertEqual(status, 0, err)
+        self.assertNotIn("dependency group", err)
 
     def test_flagged_without_tty_stops_with_4(self):
         self.change("crates/oxedi_core/build.rs", "fn main() {}\n")
@@ -252,6 +299,65 @@ class Flow(unittest.TestCase):
         text = (self.reviews() / f"ref-feature-{report['change']['tested'][:12]}" / "report.txt").read_text()
         self.assertTrue(text.endswith(f"\n{hint}\n"), text)
 
+    def test_flow_asks_before_deny(self):
+        self.change("Cargo.toml", '[package]\nname = "w"\n\n[patch.crates-io]\nx = { git = "https://evil/x" }\n')
+        status, out, err = self.review()
+        self.assertEqual(status, 4, err)
+        self.assertEqual(self.runs(), [])
+        self.assertIn("sandbox-pr: the change adds a cargo source: https://evil/x\n", err)
+        self.assertIn(
+            "sandbox-pr: cargo-deny would fetch from a source the change adds; there is no terminal to ask, so it "
+            "stops with exit 4: read the report, then set CONFIRM=yes to go on\n", err)
+        self.assertIn("new cargo sources:\n  https://evil/x\n", out)
+        self.assertIn("cargo-deny: not run\n", self.review_text())
+        report = self.report()
+        self.assertEqual((report["new_sources"], report["confirmed"]), (["https://evil/x"], "refused"))
+        self.assertEqual((report["cargo_deny"], report["pip_audit"], report["run"]), (None, [], None))
+        (self.fake / "calls.jsonl").unlink()
+        status, _, err = self.review(SANDBOX_CONFIRM="yes")
+        self.assertEqual(status, 0, err)
+        self.assertEqual(self.kinds(), ["deny", "fetch", "fetch", "fetch", "pip-audit", "run"])
+        self.assertEqual(self.report()["confirmed"], "env")
+
+    def test_an_unreadable_cargo_file_asks_before_deny(self):
+        self.change("Cargo.toml", "garbage [[\n")
+        status, out, err = self.review()
+        self.assertEqual(status, 4, err)
+        self.assertEqual(self.runs(), [])
+        prefix = "Cargo.toml after the change is not valid TOML: "
+        self.assertIn(f"sandbox-pr: cannot read a cargo file the change touches: {prefix}", err)
+        self.assertIn(
+            "sandbox-pr: cargo-deny would read a cargo file whose sources cannot be checked; there is no terminal "
+            "to ask, so it stops with exit 4", err)
+        self.assertIn(f"new cargo sources:\n  none\n  cannot read: {prefix}", out)
+        report = self.report()
+        (line,) = report["unreadable_cargo"]
+        self.assertTrue(line.startswith(prefix), line)
+        self.assertEqual((report["new_sources"], report["confirmed"]), ([], "refused"))
+
+    def test_a_non_utf8_manifest_asks_before_deny(self):
+        (self.host / "Cargo.toml").write_bytes(b"\xff\xfe")
+        git(self.host, "add", "Cargo.toml")
+        git(self.host, "commit", "-q", "-m", "binary manifest")
+        status, _, err = self.review()
+        self.assertEqual(status, 4, err)
+        self.assertEqual(self.runs(), [])
+        self.assertIn("sandbox-pr: cannot read a cargo file the change touches: Cargo.toml after the change is not "
+                      "UTF-8 text: ", err)
+
+    def test_no_new_source_asks_nothing_before_deny(self):
+        self.change("crates/oxedi_core/src/lib.rs", "pub fn g() {}\n")
+        status, out, err = self.review()
+        self.assertEqual(status, 0, err)
+        self.assertNotIn("cargo source", err)
+        self.assertIn("new cargo sources:\n  none\n", out)
+        self.assertEqual((self.report()["new_sources"], self.report()["unreadable_cargo"]), ([], []))
+
+    def review_text(self) -> str:
+        found = sorted(self.reviews().glob("ref-feature-*/report.txt"))
+        self.assertEqual(len(found), 1, found)
+        return found[0].read_text()
+
     def test_deny_toml_comes_from_the_host(self):
         self.change("tools/sandbox/deny.toml", "[advisories]\nignore = ['RUSTSEC-0000-0000']\n")
         status, _, err = self.review(SANDBOX_CONFIRM="yes")
@@ -278,7 +384,8 @@ class Flow(unittest.TestCase):
 
     def test_source_names_another_checkout(self):
         other = new_repo(self.tmp / "other")
-        commit(other, "readme.txt", "r\n")
+        (other / "crates" / "oxedi_py").mkdir(parents=True)
+        commit(other, "crates/oxedi_py/pyproject.toml", PYPROJECT)
         git(other, "checkout", "-q", "-b", "feature")
         commit(other, "build.rs", "fn main() {}\n")
         status, _, err = self.review(SANDBOX_SOURCE=str(other))
@@ -346,12 +453,32 @@ class Flow(unittest.TestCase):
         for args, line in ((["PR=12a"], 'sandbox-pr: PR must be a pull request number, 1 to 999999999, got "12a"'),
                            (["PR=7", "CONFIRM=y"], 'sandbox-pr: CONFIRM must be yes or unset, got "y"'),
                            (["PR=7", "HEAD=2"], 'sandbox-pr: HEAD must be 1 or unset, got "2"'),
-                           (["REF=-x"], 'sandbox-pr: REF must not start with "-", got "-x"')):
+                           (["REF=-x"], 'sandbox-pr: REF must not start with "-", got "-x"'),
+                           (["REF=-x", "TARGET=make py-test"], 'sandbox-pr: REF must not start with "-", got "-x"')):
             with self.subTest(args=args):
                 result = subprocess.run(["make", "--no-print-directory", "-C", str(checkout), "sandbox-pr", *args],
                                         env=self.env(SANDBOX_REF=""), capture_output=True, text=True, timeout=120)
                 self.assertEqual(result.stderr.splitlines()[0], line)
         self.assertEqual(self.runs(), [])
+
+    def test_variables_are_read_from_the_command_line_only(self):
+        checkout = make_repo_copy(self.tmp / "copy")
+        cases = (
+            ("sandbox", "CMD", 'CMD="make gates"'),
+            ("sandbox-pr", "PR", "PR=251"),
+            ("sandbox-pr", "REF", "REF=feature"),
+            ("sandbox-pr", "HEAD", "HEAD=1"),
+            ("sandbox-pr", "TARGET", 'TARGET="make py-test"'),
+            ("sandbox-pr", "CONFIRM", "CONFIRM=yes"),
+        )
+        for target, name, example in cases:
+            with self.subTest(variable=name):
+                result = subprocess.run(["make", "--no-print-directory", "-C", str(checkout), target],
+                                        env=self.env(**{name: "1"}), capture_output=True, text=True, timeout=120)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(result.stderr.splitlines()[0],
+                                 f"{target}: {name} is read from the command line only; pass it as make {target} {example}")
+                self.assertEqual(self.runs(), [])
 
     def test_every_git_of_the_process_is_isolated(self):
         environ = {"GIT_DIR": "/elsewhere", "GIT_CONFIG_GLOBAL": "/home/x/.gitconfig", "PATH": "/bin"}
@@ -367,15 +494,6 @@ class Flow(unittest.TestCase):
 def layout_mounts(argv: list[str]) -> list[dict]:
     return [dict(part.partition("=")[::2] for part in spec.split(",")) for flag, spec in zip(argv, argv[1:])
             if flag == "--mount"]
-
-
-class Combined(unittest.TestCase):
-    def test_refused_wins_then_tty_then_env(self):
-        C = sandbox_pr.Confirmed
-        self.assertEqual(sandbox_pr.combined([C.TTY, C.REFUSED]), C.REFUSED)
-        self.assertEqual(sandbox_pr.combined([C.ENV, C.TTY]), C.TTY)
-        self.assertEqual(sandbox_pr.combined([C.NOT_NEEDED, C.ENV]), C.ENV)
-        self.assertEqual(sandbox_pr.combined([]), C.NOT_NEEDED)
 
 
 if __name__ == "__main__":

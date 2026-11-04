@@ -82,6 +82,18 @@ class Requests(unittest.TestCase):
 
 
 class GitHub(unittest.TestCase):
+    def test_redacts_to_the_last_at(self):
+        for text, expected in (
+            ("https://u:p@ss@github.com/o/r.git", "https://<redacted>@github.com/o/r.git"),
+            ("https://x-access-token:ghs_secret@github.com/o/r.git", "https://<redacted>@github.com/o/r.git"),
+            ("ssh://git@github.com/o/r", "ssh://<redacted>@github.com/o/r"),
+            ("see https://a:b@c@host/p@th and https://u@h/x", "see https://<redacted>@host/p@th and https://<redacted>@h/x"),
+            ("https://github.com/o/r@v1", "https://github.com/o/r@v1"),
+            ("no url, user@host only", "no url, user@host only"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(source.redacted(text), expected)
+
     def test_github_https_forms(self):
         for url in ("git@github.com:javillegasna/oxedi.git", "ssh://git@github.com/javillegasna/oxedi",
                     "https://github.com/javillegasna/oxedi.git", "https://github.com/javillegasna/oxedi"):

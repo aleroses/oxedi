@@ -46,8 +46,9 @@ GITHUB = re.compile(
     r"(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
     r"(?P<owner>[A-Za-z0-9-]+)/(?P<repo>[A-Za-z0-9._-]+?)(?:\.git)?"
 )
-# The user and password part of a URL (`https://user:token@host/...`), never printed.
-USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s]*@")
+# The user and password part of a URL (`https://user:token@host/...`), never printed. It runs to
+# the last `@` before the path, so a password that holds an `@` is redacted whole.
+USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/?#\s]*@")
 LABEL_SAFE = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
 NO_REMOTE_REF = "couldn't find remote ref"
 

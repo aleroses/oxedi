@@ -94,12 +94,21 @@ git_isolated -C "$clone" -c user.name=sandbox-pr-check -c user.email=sandbox-pr-
   commit --quiet --no-verify --message "a synthetic hostile change" || exit 2
 tested=$(git_isolated -C "$clone" rev-parse HEAD) || exit 2
 
-xdg=${XDG_CACHE_HOME:-}
-case $xdg in /*) ;; *) xdg="$HOME/.cache" ;; esac
-mkdir -p "$xdg/oxedi-sandbox"
-cache=$(cd "$xdg/oxedi-sandbox" && pwd -P)
-review="$cache/prs/ref-$branch-${tested:0:12}"
-results="$cache/$(printf '%s' "$review/checkout" | sha256sum | cut -c1-12)/target"
+# The storage paths come from the sandbox's own modules, so the check cannot drift from them:
+# the cache root, the review directory of the planted commit and the target/ of its clone.
+mapfile -t paths < <(python3 -I -c 'import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from layout import path_hash
+from storage import cache_root, reviews
+cache = cache_root(dict(os.environ))
+reviews(cache).mkdir(mode=0o700, parents=True, exist_ok=True)
+review = reviews(cache).resolve() / f"ref-{sys.argv[2]}-{sys.argv[3][:12]}"
+print(cache, review, cache / path_hash(review / "checkout") / "target", sep="\n")' "$sandbox_dir" "$branch" "$tested") || exit 2
+[ "${#paths[@]}" -eq 3 ] || { echo "malicious-pr: cannot compute the storage paths" >&2; exit 2; }
+cache=${paths[0]}
+review=${paths[1]}
+results=${paths[2]}
 
 env -u SANDBOX_PR -u SANDBOX_HEAD SANDBOX_REF="$branch" SANDBOX_SOURCE="$clone" SANDBOX_CONFIRM=yes \
   SANDBOX_TARGET="$target" python3 -I "$sandbox_dir/sandbox_pr.py" --image "$image" --kind base --checkout "$checkout"
