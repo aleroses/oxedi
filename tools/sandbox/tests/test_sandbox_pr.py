@@ -381,8 +381,8 @@ class Flow(unittest.TestCase):
         self.assertEqual(status, 2, err)
         self.assertEqual(
             err,
-            f"sandbox-pr: another sandbox run of this checkout is in progress ({holder_text(own, holder.pid)}); "
-            "wait for it to end, or use another worktree\n",
+            f"sandbox-pr: another review of this change and commit is in progress ({holder_text(own, holder.pid)}); "
+            "wait for it to end\n",
         )
         self.assertEqual(self.runs(), [])
         self.assertFalse(clone.exists())

@@ -530,10 +530,14 @@ build on the host.
 
 **One run per checkout.** A run takes a lock in its checkout's storage before it calls docker and
 holds it until the audit is done; a second `make sandbox` or `make sandbox-pr` of the same
-checkout, or of the same change and commit, is refused with exit 2 and one line naming the first,
-`sandbox: another sandbox run of this checkout is in progress (pid 4242, since
-2026-11-04T10:15:00+01:00); wait for it to end, or use another worktree`, and `make sandbox-clean`
-with `sandbox-clean: a sandbox run of this checkout is in progress (...); wait for it to end`. A
+checkout is refused with exit 2 and one line naming the first, `sandbox: another sandbox run of
+this checkout is in progress (pid 4242, since 2026-11-04T10:15:00+01:00); wait for it to end, or
+use another worktree`. A second `make sandbox-pr` of the same change and commit is refused the
+same way with `sandbox-pr: another review of this change and commit is in progress (...); wait
+for it to end`, since that lock belongs to the review, whatever worktree asks. `make sandbox-clean`
+refuses with `sandbox-clean: a sandbox run of this checkout is in progress (...); wait for it to
+end`, and `make sandbox-clean ALL=1` with `sandbox-clean: a sandbox run that uses <dir> is in
+progress (...); wait for it to end`, for the first storage it finds in use. A
 killed runner releases the lock with its process. Each worktree has its own storage and lock, so
 two worktrees of the repository run at once. The same rule fits an AI agent working in the
 repository: give it its own worktree and let it run project code only through `make sandbox`.

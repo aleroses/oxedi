@@ -145,6 +145,23 @@ class RunLockTests(World):
         self.assertEqual(holder.poll(), None)
 
 
+class Release(unittest.TestCase):
+    def test_a_released_lock_leaves_an_empty_record(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        own = Path(temporary.name) / "own"
+        with lock.RunLock(own):
+            self.assertNotEqual(lock.lock_path(own).read_text(), "")
+        self.assertEqual(lock.lock_path(own).read_text(), "")
+
+    def test_an_empty_record_is_named_unreadable(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / "run.lock"
+        path.write_text("")
+        self.assertTrue(lock.holder(path).startswith(f"its pid and start time unreadable in {path}: "))
+
+
 class Renew(unittest.TestCase):
     def test_renew_keeps_the_held_lock(self):
         temporary = tempfile.TemporaryDirectory()

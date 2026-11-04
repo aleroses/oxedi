@@ -138,7 +138,9 @@ def fresh_clone(cache: Path, source: Path, request: Request, held: ExitStack) ->
     clean(incoming)
     change = clone(source, request, incoming)
     review = root / f"{change.label}-{change.tested[:12]}"
-    held.enter_context(RunLock(own_dir(cache, review / "checkout")))
+    held.enter_context(RunLock(
+        own_dir(cache, review / "checkout"),
+        whose="another review of this change and commit", advice="wait for it to end"))
     refuse_if_running(container_name(review / "checkout"))
     renew(cache, review)
     review.mkdir(mode=0o700)
