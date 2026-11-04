@@ -91,12 +91,28 @@ How a stage runs:
    because `wk-setup` copies the `@CONTRIBUTING.md` import line as text and does not expand it:
    `wk-setup <plan> 'CLAUDE.md#Non-negotiables in code' 'CONTRIBUTING.md#Code conventions'
    'CONTRIBUTING.md#Tests and test data' 'CONTRIBUTING.md#Complexity'
-   'CLAUDE.md#Final review focus' lens:rust lens:python`.
+   'CLAUDE.md#Final review focus' 'CLAUDE.md#Agents in the sandbox' lens:rust lens:python`.
    Before deleting the workspace, archive the ledger with
    `wk-archive <plan> .doc/analysis/stage-N-ledger.md`.
 4. PR against `master` as above. The owner merges.
 5. Deferred minors become issues on Project #8. Then update `.doc/roadmap.md`,
    `.doc/state.md` and, when what users can do changed, `docs/roadmap.md`.
+
+### Agents in the sandbox
+
+- Each implementer works in its own worktree of the feature branch, never in the main checkout.
+- Every command that runs project or dependency code runs as `make sandbox CMD="..."`:
+  `make gates`, `make py-test`, `make viewer-test` (with `IMAGE=viewer`), the sandbox's own tests
+  and a single `cargo test` alike. Only the targets `CONTRIBUTING.md` lists under "What stays on
+  the host" run on the host.
+- Docker commands use the rootful daemon for that command only, as
+  `env -u DOCKER_HOST DOCKER_HOST=unix:///var/run/docker.sock make sandbox CMD="..."`; never
+  change the shell's or Docker's configuration. When that daemon does not answer, the agent stops
+  and asks the owner to start it.
+- One sandbox run per worktree at a time: a second one is refused while the first runs. Do not
+  commit while a run of the same worktree is in progress, since its audit reports the change.
+- Implementers run in parallel only when the plan marks batches with no file in common, each in
+  its own worktree; the controller integrates them in batch order.
 
 ### Final review focus
 
