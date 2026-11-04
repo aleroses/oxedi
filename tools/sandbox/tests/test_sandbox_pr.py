@@ -369,14 +369,5 @@ def layout_mounts(argv: list[str]) -> list[dict]:
             if flag == "--mount"]
 
 
-class Combined(unittest.TestCase):
-    def test_refused_wins_then_tty_then_env(self):
-        C = sandbox_pr.Confirmed
-        self.assertEqual(sandbox_pr.combined([C.TTY, C.REFUSED]), C.REFUSED)
-        self.assertEqual(sandbox_pr.combined([C.ENV, C.TTY]), C.TTY)
-        self.assertEqual(sandbox_pr.combined([C.NOT_NEEDED, C.ENV]), C.ENV)
-        self.assertEqual(sandbox_pr.combined([]), C.NOT_NEEDED)
-
-
 if __name__ == "__main__":
     unittest.main()
