@@ -102,7 +102,7 @@ sys.path.insert(0, sys.argv[1])
 from layout import path_hash
 from storage import cache_root, reviews
 cache = cache_root(dict(os.environ))
-reviews(cache).mkdir(parents=True, exist_ok=True)
+reviews(cache).mkdir(mode=0o700, parents=True, exist_ok=True)
 review = reviews(cache).resolve() / f"ref-{sys.argv[2]}-{sys.argv[3][:12]}"
 print(cache, review, cache / path_hash(review / "checkout") / "target", sep="\n")' "$sandbox_dir" "$branch" "$tested") || exit 2
 [ "${#paths[@]}" -eq 3 ] || { echo "malicious-pr: cannot compute the storage paths" >&2; exit 2; }

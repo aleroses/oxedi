@@ -104,11 +104,11 @@ class Kinds(Repo):
 
     def test_nested_src_is_script(self):
         for path in ("tools/crates/x/src/evil.py", "crates/x/y/src/evil.py", "crates/x/y/python/evil.sh",
-                     "docs/crates/x/src/evil.js", "crates/src/evil.py", "crates/x/evil.py"):
+                     "docs/crates/x/src/evil.js", "crates/src/evil.py", "crates/x/evil.py", "crates/x/tests/src/h.py"):
             with self.subTest(path=path):
                 self.assertIs(risk.is_script(path), True)
         for path in ("crates/oxedi_core/src/lib.py", "crates/oxedi_py/python/oxedi/__init__.py",
-                     "crates/oxedi_core/src/value/deep/x.sh"):
+                     "crates/oxedi_core/src/value/deep/x.sh", "crates/oxedi_py/python/oxedi/x.py"):
             with self.subTest(path=path):
                 self.assertIs(risk.is_script(path), False)
 
