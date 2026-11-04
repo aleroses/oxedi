@@ -122,6 +122,12 @@ def read_only_set(checkout: Checkout, storage: Storage, skip: tuple[str, ...], k
     return [a for mount in binds + masks + blanks for a in mount]
 
 
+def placeholder_binds(checkout: Checkout, storage: Storage) -> list[str]:
+    """The empty read-only file over each absent root name the host loads: the run cannot create
+    one."""
+    return [a for name in checkout.placeholders for a in bind(storage.empty, f"{WORK}/{name}", True)]
+
+
 def network_delta(checkout: Checkout, storage: Storage, kind: ImageKind, writable: tuple[str, ...]) -> list[str]:
     """Network on, the checkout read-only with .cargo masked (no repository cargo configuration
     applies), the shared caches writable, rustc wrappers cleared, the image's own mounts in place
@@ -157,8 +163,8 @@ def audit_delta(checkout: Checkout, storage: Storage, kind: ImageKind) -> list[s
 
 
 def run_delta(checkout: Checkout, storage: Storage, kind: ImageKind) -> list[str]:
-    """No network, the checkout writable except the read-only set, the cargo registry read-only,
-    no shared uv cache."""
+    """No network, the checkout writable except the read-only set and the absent names the host
+    loads, the cargo registry read-only, no shared uv cache."""
     return [
         "--network", "none",
         *env_args({
@@ -166,6 +172,7 @@ def run_delta(checkout: Checkout, storage: Storage, kind: ImageKind) -> list[str
             "CARGO_NET_OFFLINE": "true", "UV_OFFLINE": "1", "CARGO_INCREMENTAL": "0",
         }),
         *bind(checkout.root, WORK, False), *read_only_set(checkout, storage, (), kind),
+        *placeholder_binds(checkout, storage),
         *bind(storage.target, f"{WORK}/target", False), *own_binds(storage, kind, OWN_MOUNTS[kind]),
         *bind(storage.cargo, CARGO_HOME, True),
     ]

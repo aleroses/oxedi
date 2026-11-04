@@ -55,7 +55,7 @@ from layout import Checkout, SandboxError, container_name, path_hash, refuse_lin
 from lifecycle import (  # noqa: E402
     DaemonInfo, daemon_info, explain, image_labels, limits_from, refuse_if_running, run_container, running,
 )
-from storage import Storage, cache_root, clean, empty_dir, prepare, storage_for  # noqa: E402
+from storage import Storage, cache_root, clean, empty_dir, placeholders, prepare, storage_for  # noqa: E402
 
 FETCH_BUDGET_S = 600
 # The Playwright version the viewer image's browser was installed for.
@@ -108,6 +108,7 @@ def describe(plan: Plan, labels: dict[str, str]) -> str:
         f"read-only: {', '.join(plan.checkout.read_only) or 'none'}",
         f"masked: {', '.join(plan.checkout.masked) or 'none'}",
         f"hidden: {', '.join(plan.checkout.hidden) or 'none'}",
+        f"held empty in the run: {', '.join(plan.checkout.placeholders) or 'none'}",
     ])
 
 
@@ -133,7 +134,9 @@ def fetch_phase(plan: Plan) -> int:
 
 def run_phase(plan: Plan, command: str) -> int:
     started = time.monotonic()
-    outcome = run_container(plan.argv(Phase.RUN, run_command(command)), plan.checkout.name, plan.limits.timeout_s)
+    with placeholders(plan.checkout.root, plan.checkout.placeholders):
+        outcome = run_container(plan.argv(Phase.RUN, run_command(command)), plan.checkout.name,
+                                plan.limits.timeout_s)
     print(f"sandbox: run took {time.monotonic() - started:.1f} s", file=sys.stderr)
     if outcome.status != 0:
         budget = f"the command ran past SANDBOX_TIMEOUT={plan.limits.timeout_s} s"

@@ -282,6 +282,43 @@ class Arguments(World):
                     self.assertIn("readonly", mount)
             self.assertFalse([m for m in mounts(argv) if m.get("dst") == "/work/crates/m/src/lib.rs"])
 
+    def test_names_the_host_loads_read_only(self):
+        loaded = [
+            "crates/oxedi_py/tests/conftest.py", "crates/oxedi_py/pytest.ini", "setup.cfg", "tox.ini", "noxfile.py",
+            "crates/p/sitecustomize.py", "crates/p/usercustomize.py", "sub/.envrc",
+        ]
+        checkout = self.checkout("c", "Makefile", *loaded, "crates/oxedi_py/tests/test_x.py")
+        for phase in arguments.Phase:
+            argv = self.phase_args(phase, checkout)
+            for path in loaded:
+                with self.subTest(phase=phase, path=path):
+                    mount = mount_at(argv, f"/work/{path}")
+                    self.assertEqual((mount["type"], mount["src"]), ("bind", str(checkout / path)))
+                    self.assertIn("readonly", mount)
+            self.assertFalse([m for m in mounts(argv) if m.get("dst") == "/work/crates/oxedi_py/tests/test_x.py"])
+
+    def test_absent_root_names_held_in_the_run_only(self):
+        checkout = self.checkout("c", "Makefile")
+        empty = str(self.own(checkout) / "empty")
+        run = self.phase_args(arguments.Phase.RUN, checkout)
+        for name in ("GNUmakefile", "makefile", "conftest.py"):
+            with self.subTest(name=name):
+                mount = mount_at(run, f"/work/{name}")
+                self.assertEqual((mount["type"], mount["src"]), ("bind", empty))
+                self.assertIn("readonly", mount)
+        for phase in (arguments.Phase.FETCH, arguments.Phase.AUDIT):
+            with self.subTest(phase=phase):
+                destinations = {m.get("dst") for m in mounts(self.phase_args(phase, checkout))}
+                self.assertFalse(destinations & {"/work/GNUmakefile", "/work/makefile", "/work/conftest.py"})
+
+    def test_a_present_root_name_is_not_held(self):
+        checkout = self.checkout("c", "Makefile", "conftest.py", "GNUmakefile")
+        run = self.phase_args(arguments.Phase.RUN, checkout)
+        conftest = mount_at(run, "/work/conftest.py")
+        self.assertEqual((conftest["src"], "readonly" in conftest), (str(checkout / "conftest.py"), True))
+        self.assertEqual(mount_at(run, "/work/GNUmakefile")["src"], str(checkout / "GNUmakefile"))
+        self.assertEqual(mount_at(run, "/work/makefile")["src"], str(self.own(checkout) / "empty"))
+
     def test_ignored_paths_masked_outputs_not(self):
         outputs = [
             "target/debug/x", ".venv/bin/python", "crates/a/__pycache__/x.cpython-313.pyc",
@@ -500,6 +537,27 @@ class Runner(World):
         self.assertIs([c for c in self.runs() if "bash" in c["argv"]][0]["binds"][str(empty)]["mount_point"], True)
         self.assertEqual(empty.read_bytes(), b"")
         self.assertEqual(empty.stat().st_mode & 0o777, 0o444 & ~current_umask())
+
+    def test_absent_root_names_held_during_the_run_then_removed(self):
+        checkout = self.checkout()
+        result = self.sandbox(checkout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("held empty in the run: GNUmakefile, makefile, conftest.py", result.stderr)
+        call = [c for c in self.runs() if "bash" in c["argv"]][0]
+        empty = str(self.own(checkout) / "empty")
+        for name in ("GNUmakefile", "makefile", "conftest.py"):
+            with self.subTest(name=name):
+                self.assertEqual(mount_at(call["argv"], f"/work/{name}")["src"], empty)
+                self.assertIs(call["binds"][empty]["mount_point"], True)
+                self.assertFalse(os.path.lexists(checkout / name))
+        self.assertNotIn("the run left a new path", result.stderr)
+
+    def test_a_held_name_the_run_filled_is_left_for_the_audit(self):
+        checkout = self.checkout()
+        result = self.sandbox(checkout, FAKE_RUN_WRITES="chmod u+w GNUmakefile && echo 'all:' > GNUmakefile")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("sandbox: the run left a new path GNUmakefile", result.stderr)
+        self.assertEqual((checkout / "GNUmakefile").read_text(), "all:\n")
 
     def test_xdg_cache_home_holds_the_storage(self):
         checkout = self.checkout()
@@ -724,6 +782,36 @@ UV_INSTALL = [
     "uv", "pip", "install", "--python", "/work/.venv/bin/python", "--no-build",
     "--group", "crates/oxedi_py/pyproject.toml:contributor",
 ]
+
+
+class Placeholders(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_each_name_is_an_empty_file_during_the_run_only(self):
+        with storage.placeholders(self.root, ("GNUmakefile", "conftest.py")):
+            for name in ("GNUmakefile", "conftest.py"):
+                self.assertEqual((self.root / name).read_bytes(), b"")
+        self.assertEqual(sorted(os.listdir(self.root)), [])
+
+    def test_a_name_that_appeared_is_refused(self):
+        (self.root / "makefile").write_text("all:\n")
+        with self.assertRaises(layout.SandboxError) as caught, storage.placeholders(self.root, ("makefile",)):
+            pass
+        self.assertTrue(str(caught.exception).startswith(
+            f"cannot make the empty makefile the run binds over in {self.root}: "), caught.exception)
+        self.assertEqual((self.root / "makefile").read_text(), "all:\n")
+
+    @unittest.skipIf(os.geteuid() == 0, "root removes files from a read-only directory")
+    def test_what_cannot_be_removed_is_one_line(self):
+        self.addCleanup(self.root.chmod, 0o700)
+        with self.assertRaises(layout.SandboxError) as caught, storage.placeholders(self.root, ("GNUmakefile",)):
+            self.root.chmod(0o500)
+        self.assertEqual(
+            str(caught.exception),
+            f"cannot remove {self.root / 'GNUmakefile'} (Permission denied), made empty for the run; remove it by hand")
 
 
 class Fetch(World):
