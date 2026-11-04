@@ -64,10 +64,8 @@ pub enum CopyError {
     },
     /// `version` names no built-in spec.
     UnknownVersion {
-        /// The version given.
-        version: String,
-        /// The versions of the built-in specs.
-        known: Vec<&'static str>,
+        /// The core's account of the version given and the versions there are.
+        source: oxedi_core::UnknownVersion,
     },
     /// A field of `delimiters` the envelope does not have.
     UnknownDelimiter {
@@ -176,6 +174,12 @@ pub fn bytes_literal(bytes: &[u8]) -> String {
     format!("b'{}'", bytes.escape_ascii())
 }
 
+impl From<oxedi_core::UnknownVersion> for CopyError {
+    fn from(source: oxedi_core::UnknownVersion) -> CopyError {
+        CopyError::UnknownVersion { source }
+    }
+}
+
 impl fmt::Display for CopyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -213,11 +217,7 @@ impl fmt::Display for CopyError {
                 "{FORMAT}: the option \"time\" is {value}, which is out of range for an X12 time; \
                  it must be from 00:00:00 to 23:59:59"
             ),
-            CopyError::UnknownVersion { version, known } => write!(
-                f,
-                "{FORMAT}: unknown version {version:?}; version must be one of {}",
-                quoted(known)
-            ),
+            CopyError::UnknownVersion { source } => write!(f, "{FORMAT}: {source}"),
             CopyError::UnknownDelimiter { name, known } => write!(
                 f,
                 "{FORMAT}: delimiters has no field {name:?}; its fields are {}",
@@ -314,8 +314,8 @@ impl FromPanic for CopyError {
 
 impl std::error::Error for CopyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // `Row` and `Write` print their inner error in full, so the chain
-        // stops here instead of printing it a second time.
+        // `Row`, `Write` and `UnknownVersion` print their inner error in
+        // full, so the chain stops here instead of printing it a second time.
         match self {
             CopyError::UnknownOption { .. }
             | CopyError::FileOption { .. }

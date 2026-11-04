@@ -6,7 +6,8 @@ mod common;
 
 use common::delimiters;
 
-use oxedi_core::frame::{BYTE_ORDER_MARK, first_frame, next_frame};
+use oxedi_core::frame::{first_frame, next_frame};
+use oxedi_core::trivia::BYTE_ORDER_MARK;
 use oxedi_core::{Delimiters, Document, Span, Tokenizer};
 use proptest::prelude::*;
 

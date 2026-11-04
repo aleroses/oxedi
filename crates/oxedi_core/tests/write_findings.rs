@@ -14,7 +14,7 @@ fn envelope() -> Envelope {
 
 fn parse(spec: &Spec, bytes: &[u8]) -> Tables {
     let document = Document::parse(bytes).unwrap();
-    Processor::run(spec, &document).0
+    Processor::run(spec, &document, None).0
 }
 
 /// emedny (5010): 3 claims, services, adjustments.

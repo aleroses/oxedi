@@ -2,8 +2,8 @@
 
 use super::tests::{delimiters, spec};
 use super::{ColumnSchema, Projector, TableSchema, spec_schema, table_columns};
-use crate::column::ColumnType;
 use crate::spec::Spec;
+use crate::value::ColumnType;
 
 const INDEX: ColumnType = ColumnType::Int64 { scale: 0 };
 

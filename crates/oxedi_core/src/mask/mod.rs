@@ -64,15 +64,25 @@ pub enum DateMode {
 }
 
 impl DateMode {
+    /// Every mode.
+    const ALL: [DateMode; 3] = [DateMode::Year, DateMode::Shift, DateMode::Keep];
+
     /// Reads `year`, `shift` or `keep`.
     pub fn parse(text: &str) -> Result<DateMode, MaskError> {
-        match text {
-            "year" => Ok(DateMode::Year),
-            "shift" => Ok(DateMode::Shift),
-            "keep" => Ok(DateMode::Keep),
-            other => Err(MaskError::UnknownDateMode {
-                given: other.to_string(),
-            }),
+        DateMode::ALL
+            .into_iter()
+            .find(|mode| mode.word() == text)
+            .ok_or_else(|| MaskError::UnknownDateMode {
+                given: text.to_string(),
+            })
+    }
+
+    /// The word that names the mode: `year`, `shift` or `keep`.
+    pub fn word(self) -> &'static str {
+        match self {
+            DateMode::Year => "year",
+            DateMode::Shift => "shift",
+            DateMode::Keep => "keep",
         }
     }
 }
@@ -139,10 +149,10 @@ impl Mask {
         i32::try_from(u32::from_be_bytes(head) % 365).unwrap_or(0) - 182
     }
 
-    /// January 1 of the year containing `days` (days since 1970-01-01), as days.
-    pub fn year_start(days: i32) -> i32 {
-        let year = civil_year(i64::from(days));
-        i32::try_from(days_from_jan_first(year)).unwrap_or(days)
+    /// January 1 of the year containing `days` (days since 1970-01-01), as
+    /// days; `None` when that January 1 is before `i32::MIN`.
+    pub fn year_start(days: i32) -> Option<i32> {
+        crate::value::year_start(days)
     }
 
     fn digest(&self, tag: &[u8], value: &[u8]) -> [u8; 32] {
@@ -162,27 +172,4 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
     };
     mac.update(message);
     mac.finalize().into_bytes().into()
-}
-
-/// The civil year of a day count since 1970-01-01.
-fn civil_year(days: i64) -> i64 {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let year = yoe + era * 400;
-    if mp >= 10 { year + 1 } else { year }
-}
-
-/// Days since 1970-01-01 of January 1 of `year`.
-fn days_from_jan_first(year: i64) -> i64 {
-    let y = year - 1;
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    // January is month index 10 of a year that starts in March.
-    let doy = (153 * 10 + 2) / 5;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
 }

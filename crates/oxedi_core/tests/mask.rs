@@ -23,8 +23,8 @@ fn runs(
     for (name, bytes, delims) in common::all_files() {
         let spec = common::select(&five, &four, &bytes, delims);
         let document = Document::with_delimiters(&bytes[..], delims).unwrap();
-        let (plain, plain_diagnostics) = Processor::run(spec, &document);
-        let (masked, masked_diagnostics) = Processor::run_masked(spec, &document, &mask);
+        let (plain, plain_diagnostics) = Processor::run(spec, &document, None);
+        let (masked, masked_diagnostics) = Processor::run(spec, &document, Some(&mask));
         check(
             &name,
             spec,
@@ -81,7 +81,11 @@ fn a_mask_keeps_the_shape_and_every_column_it_does_not_flag() {
                                 );
                             }
                             (Some(Phi::Date), Cell::Date32(days)) => {
-                                assert_eq!(now, Cell::Date32(Mask::year_start(days)), "{at}");
+                                assert_eq!(
+                                    now,
+                                    Cell::Date32(Mask::year_start(days).unwrap()),
+                                    "{at}"
+                                );
                             }
                             (Some(kind), other) => panic!("{at}: {kind:?} column holds {other:?}"),
                         }
@@ -120,10 +124,10 @@ fn masked_cells_depend_on_the_key_only() {
     for (name, bytes, delims) in common::all_files() {
         let spec = common::select(&five, &four, &bytes, delims);
         let document = Document::with_delimiters(&bytes[..], delims).unwrap();
-        let once = Processor::run_masked(spec, &document, &mask);
-        let again = Processor::run_masked(spec, &document, &mask);
+        let once = Processor::run(spec, &document, Some(&mask));
+        let again = Processor::run(spec, &document, Some(&mask));
         assert_eq!(once, again, "{name}: the same key gives the same output");
-        let (elsewhere, _) = Processor::run_masked(spec, &document, &other);
+        let (elsewhere, _) = Processor::run(spec, &document, Some(&other));
         for (table, changed) in once.0.iter().zip(&elsewhere) {
             for ((column, a), (_, b)) in table.columns().iter().zip(changed.columns()) {
                 if !matches!(flag(spec, table, column), Some(Phi::Name | Phi::Id)) {
@@ -184,7 +188,7 @@ fn originals(spec: &Spec, plain: &Tables) -> Vec<Original> {
                     Some(Cell::Date32(days)) => {
                         let rendered = data.render(row).unwrap();
                         push(rendered.replace('-', ""), row);
-                        if Mask::year_start(days) != days {
+                        if Mask::year_start(days) != Some(days) {
                             push(rendered, row);
                         }
                     }
@@ -470,7 +474,7 @@ fn shifted_dates_equal_their_own_date_plus_the_rows_offset() {
                             seeded += 1;
                             was + mask.shift_days(seed)
                         }
-                        None => Mask::year_start(was),
+                        None => Mask::year_start(was).unwrap(),
                     };
                     assert_eq!(
                         now, expected,
@@ -500,8 +504,8 @@ fn a_finding_on_a_flagged_place_has_its_datum_replaced() {
             let delims = oxedi_core::Delimiters::from_isa(&bytes).unwrap();
             let spec = common::select(&five, &four, &bytes, delims);
             let document = Document::with_delimiters(&bytes[..], delims).unwrap();
-            let (_, plain) = Processor::run(spec, &document);
-            let (_, masked) = Processor::run_masked(spec, &document, &mask);
+            let (_, plain) = Processor::run(spec, &document, None);
+            let (_, masked) = Processor::run(spec, &document, Some(&mask));
             let datums = |found: &[Diagnostic]| -> Vec<String> {
                 found
                     .iter()

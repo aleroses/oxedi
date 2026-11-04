@@ -25,7 +25,7 @@ runs:
     - name: Cached tools match Cargo.lock
       if: steps.cache.outputs.cache-hit == 'true'
       shell: bash
-      run: |
+      run: | # zizmor: ignore[github-env] the value written is the tool directory this step installs into, and the step exists to put it on the PATH
         bin="$HOME/.oxedi-wasm-tools/bin"
         echo "$bin" >> "$GITHUB_PATH"
         locked=$(make --no-print-directory wasm-bindgen-version)

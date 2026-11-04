@@ -1,3 +1,19 @@
 # Raising a complexity ceiling or a baseline entry needs the owner's review.
 /.github/complexity-baseline.txt @javillegasna
 /clippy.toml @javillegasna
+/tools/complexity/ @javillegasna
+
+# Files that run on the maintainer's machine or in CI with its secrets, or that decide which
+# code and dependencies a build pulls in: a change to them needs the owner's review.
+/Makefile @javillegasna
+/make/ @javillegasna
+/.github/ @javillegasna
+/tools/ @javillegasna
+/crates/*/scripts/ @javillegasna
+/Cargo.toml @javillegasna
+/Cargo.lock @javillegasna
+**/Cargo.toml @javillegasna
+**/pyproject.toml @javillegasna
+/docs/requirements.txt @javillegasna
+**/build.rs @javillegasna
+/rust-toolchain.toml @javillegasna

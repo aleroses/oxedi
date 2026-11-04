@@ -12,7 +12,8 @@
 //! numbers with leading zeros, text with trailing spaces.
 
 use crate::delimiters::Delimiters;
-use crate::spec::{ElementDef, ElementType, Spec};
+use crate::spec::{ElementDef, Spec};
+use crate::value::{ElementTextError, ElementType};
 
 use super::finding::WriteError;
 use super::render::{envelope_date, envelope_time};
@@ -50,6 +51,30 @@ pub struct Envelope {
 }
 
 impl Envelope {
+    /// The qualifier of a sender or receiver id when the caller gives none.
+    pub const DEFAULT_QUALIFIER: &'static str = "ZZ";
+    /// The usage indicator when the caller gives none: production data.
+    pub const DEFAULT_USAGE_INDICATOR: &'static str = "P";
+    /// The first control number when the caller gives none.
+    pub const DEFAULT_CONTROL_NUMBER: u64 = 1;
+
+    /// An envelope with both qualifiers `ZZ`, otherwise as [`Envelope::new`].
+    pub fn with_ids(
+        sender_id: impl Into<String>,
+        receiver_id: impl Into<String>,
+        date: i32,
+        time: i32,
+    ) -> Envelope {
+        Envelope::new(
+            Self::DEFAULT_QUALIFIER,
+            sender_id,
+            Self::DEFAULT_QUALIFIER,
+            receiver_id,
+            date,
+            time,
+        )
+    }
+
     /// An envelope for production data with control number 1, the
     /// delimiters `*`, `:`, `~` and `^`, and no line breaks.
     pub fn new(
@@ -69,8 +94,8 @@ impl Envelope {
             application_receiver: None,
             date,
             time,
-            usage_indicator: "P".to_string(),
-            control_number: 1,
+            usage_indicator: Self::DEFAULT_USAGE_INDICATOR.to_string(),
+            control_number: Self::DEFAULT_CONTROL_NUMBER,
             delimiters: Delimiters::new(b'*', b':', b'~').with_repetition(b'^'),
             line_break: false,
         }
@@ -157,7 +182,7 @@ pub(super) struct EnvelopeValue {
     /// `false` for a delimiter written as the value itself.
     pub(super) checked: bool,
     /// Why the field has no text the element can hold, when it has none.
-    pub(super) refused: Option<String>,
+    pub(super) refused: Option<ElementTextError>,
 }
 
 /// The delimiters the written file uses: those of the envelope, with the
@@ -266,7 +291,7 @@ fn field_value(
     field: Field,
     def: &ElementDef,
     envelope: &Envelope,
-) -> Option<Result<(Vec<u8>, bool), String>> {
+) -> Option<Result<(Vec<u8>, bool), ElementTextError>> {
     let text = |value: &str| Some(Ok((value.as_bytes().to_vec(), true)));
     let delimiters = &envelope.delimiters;
     match field {

@@ -13,10 +13,13 @@ pd = pytest.importorskip("pandas")
 import n104_shim  # noqa: E402
 from conftest import CORE_TESTS, LARGEST, SAMPLES, path_of  # noqa: E402
 from edi_835_parser.segments import organization as library_organization  # noqa: E402
+import oxedi  # noqa: E402
 from oxedi import ParseError  # noqa: E402
 from oxedi import edi_835_parser as compat  # noqa: E402
 from oxedi.edi_835_parser import _codes  # noqa: E402
 from oxedi.edi_835_parser._convert import ENCODING  # noqa: E402
+from oxedi.edi_835_parser import _unpad  # noqa: E402
+from oxedi.edi_835_parser._unpad import source_segment  # noqa: E402
 
 n104_shim.apply()
 
@@ -284,6 +287,56 @@ def test_an_empty_address_and_location_are_kept_as_in_the_library(tmp_path):
     assert organization(actual.payee) == organization(expected.payee)
     assert (actual.payee.address, actual.payee.location) == (None, None)
     pd.testing.assert_frame_equal(compat.parse(path).to_dataframe(), old(path).to_dataframe(), check_exact=True)
+
+
+def test_a_written_empty_cell_and_an_absent_one_differ_without_the_document(tmp_path, monkeypatch):
+    path = tmp_path / "a.835"
+    path.write_bytes(synthetic().replace(b"N3*1 MAIN ST~", b"N3*~"))
+    (library,) = list(old(path))
+    assert (library.payer.address.address, library.payee.address) == ("", None)
+
+    def refuse(self, index):
+        raise AssertionError("the compat build read the document")
+
+    (actual,) = list(compat.parse(path))
+    monkeypatch.setattr(oxedi.Document, "__getitem__", refuse)
+    assert (actual.payer.address.address, actual.payee.address) == ("", None)
+
+
+def test_a_column_with_an_occurrence_source_names_its_segment():
+    source = {"occurrence": "payer_identification", "element": 2}
+    assert source_segment("rows_organizations", "name", source) == b"N1"
+    assert source_segment("rows_organizations", "name", {"segment": "N3", "element": 1}) == b"N3"
+
+
+def test_an_unknown_occurrence_names_the_table_column_and_occurrence():
+    with pytest.raises(ValueError) as caught:
+        source_segment("rows_organizations", "name", {"occurrence": "no_such", "element": 2})
+    assert str(caught.value) == (
+        "table 'rows_organizations', column 'name': occurrence 'no_such' is not declared "
+        "by ['1000A', '1000B'] or their parents"
+    )
+
+
+def test_a_loop_without_occurrences_names_the_table_column_and_loop(monkeypatch):
+    monkeypatch.setattr(_unpad, "_loops", lambda: {"bare": {}})
+    with pytest.raises(ValueError) as caught:
+        source_segment("rows", "code", {"loop": "bare", "occurrence": "o", "element": 1})
+    assert str(caught.value) == "table 'rows', column 'code': loop 'bare' declares no occurrences"
+
+
+def test_a_loop_the_spec_does_not_have_names_the_table_column_and_loop():
+    with pytest.raises(ValueError) as caught:
+        source_segment("rows", "code", {"loop": "nope", "occurrence": "o", "element": 1})
+    assert str(caught.value) == "table 'rows', column 'code': loop 'nope' is not in the spec"
+
+
+def test_a_source_naming_neither_segment_nor_occurrence_is_refused():
+    with pytest.raises(ValueError) as caught:
+        source_segment("rows", "code", {"element": 1})
+    assert str(caught.value) == (
+        "table 'rows', column 'code': the source {'element': 1} names neither a segment nor an occurrence"
+    )
 
 
 def test_availity_and_zirmed_are_named_as_the_library_names_them(tmp_path):

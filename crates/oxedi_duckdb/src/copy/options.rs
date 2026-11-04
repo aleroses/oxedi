@@ -5,13 +5,13 @@
 //! values; [`OptionValue`] is that value read into Rust, so the rules here
 //! do not touch the C API.
 
-use oxedi_core::Delimiters;
+use oxedi_core::value::{
+    ConvertError, TimeUnit, days_from_civil, seconds_from, seconds_of_day, time_of_day,
+};
 use oxedi_core::write::Envelope;
+use oxedi_core::{Builtin, Delimiters};
 
 use super::error::CopyError;
-
-/// The version used when `version` is not given.
-pub const DEFAULT_VERSION: &str = "5010";
 
 /// Every option, in the order the messages list them.
 pub const OPTIONS: &[&str] = &[
@@ -78,9 +78,9 @@ pub enum Kind {
     Integer(i128),
     /// A DATE, as days since 1970-01-01.
     Date(i32),
-    /// A TIME or TIME_NS: `value` counted `per_second` to the second since
-    /// midnight (microseconds, or nanoseconds).
-    Time { value: i64, per_second: i64 },
+    /// A TIME or TIME_NS: `value` counted in `unit` since midnight
+    /// (microseconds, or nanoseconds).
+    Time { value: i64, unit: TimeUnit },
     /// A STRUCT, its fields in order.
     Struct(Vec<(String, OptionValue)>),
     /// Any other type, or several values.
@@ -132,75 +132,127 @@ fn text(name: &'static str, value: &OptionValue) -> Result<String, CopyError> {
     }
 }
 
-fn optional_text(
-    given: &[(String, OptionValue)],
-    name: &'static str,
-) -> Result<Option<String>, CopyError> {
-    lookup(given, name)
-        .map(|value| text(name, value))
-        .transpose()
+/// Refuses an option that is a file option of `COPY` or that is not known.
+fn reject_unknown(given: &[(String, OptionValue)]) -> Result<(), CopyError> {
+    for (name, _) in given {
+        if let Some((_, reason)) = FILE_OPTIONS.iter().find(|(option, _)| option == name) {
+            return Err(CopyError::FileOption {
+                name: name.clone(),
+                reason,
+            });
+        }
+        if !OPTIONS.contains(&name.as_str()) {
+            return Err(CopyError::UnknownOption {
+                name: name.clone(),
+                known: OPTIONS,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// A required VARCHAR option.
+fn required_text(given: &[(String, OptionValue)], name: &'static str) -> Result<String, CopyError> {
+    text(name, required(given, name)?)
+}
+
+fn required_date(given: &[(String, OptionValue)]) -> Result<i32, CopyError> {
+    date(required(given, "date")?)
+}
+
+fn required_time(given: &[(String, OptionValue)]) -> Result<i32, CopyError> {
+    time(required(given, "time")?)
+}
+
+/// Reads one optional option into the envelope.
+type Apply = fn(&mut Envelope, &OptionValue) -> Result<(), CopyError>;
+
+/// The optional options and where each one goes in the envelope.
+const OPTIONAL: [(&str, Apply); 8] = [
+    ("sender_qualifier", |envelope, value| {
+        envelope.sender_qualifier = text("sender_qualifier", value)?;
+        Ok(())
+    }),
+    ("receiver_qualifier", |envelope, value| {
+        envelope.receiver_qualifier = text("receiver_qualifier", value)?;
+        Ok(())
+    }),
+    ("usage_indicator", |envelope, value| {
+        envelope.usage_indicator = text("usage_indicator", value)?;
+        Ok(())
+    }),
+    ("control_number", |envelope, value| {
+        envelope.control_number = control_number(value)?;
+        Ok(())
+    }),
+    ("application_sender", |envelope, value| {
+        envelope.application_sender = Some(text("application_sender", value)?);
+        Ok(())
+    }),
+    ("application_receiver", |envelope, value| {
+        envelope.application_receiver = Some(text("application_receiver", value)?);
+        Ok(())
+    }),
+    ("delimiters", |envelope, value| {
+        envelope.delimiters = delimiters(value)?;
+        Ok(())
+    }),
+    ("line_break", |envelope, value| {
+        envelope.line_break = line_break(value)?;
+        Ok(())
+    }),
+];
+
+/// The envelope of the required options, with the defaults of every other
+/// field.
+fn parties(given: &[(String, OptionValue)]) -> Result<Envelope, CopyError> {
+    Ok(Envelope::with_ids(
+        required_text(given, "sender_id")?,
+        required_text(given, "receiver_id")?,
+        required_date(given)?,
+        required_time(given)?,
+    ))
+}
+
+/// The envelope the options describe: the parties, then every optional
+/// field that is given.
+fn envelope(given: &[(String, OptionValue)]) -> Result<Envelope, CopyError> {
+    let mut envelope = parties(given)?;
+    for (name, apply) in OPTIONAL {
+        if let Some(value) = lookup(given, name) {
+            apply(&mut envelope, value)?;
+        }
+    }
+    Ok(envelope)
+}
+
+/// A bare boolean option means true, as DuckDB's own options (HEADER) do.
+fn line_break(value: &OptionValue) -> Result<bool, CopyError> {
+    match value.kind {
+        Kind::Null => Ok(true),
+        Kind::Bool(flag) => Ok(flag),
+        _ => Err(wrong("line_break", value, BOOLEAN)),
+    }
+}
+
+/// The version option, the fallback built-in's version when it is not given.
+fn version(given: &[(String, OptionValue)]) -> Result<String, CopyError> {
+    match lookup(given, "version").map(|value| (&value.kind, value)) {
+        None => Ok(Builtin::fallback().version.text().to_owned()),
+        Some((Kind::Text(version), _)) => Ok(version.clone()),
+        Some((Kind::Null, _)) => Err(CopyError::NoValue { name: "version" }),
+        Some((_, value)) => Err(wrong("version", value, VERSION)),
+    }
 }
 
 impl Settings {
     /// Reads the options, each name lower case.
     pub fn parse(given: &[(String, OptionValue)]) -> Result<Settings, CopyError> {
-        for (name, _) in given {
-            if let Some((_, reason)) = FILE_OPTIONS.iter().find(|(option, _)| option == name) {
-                return Err(CopyError::FileOption {
-                    name: name.clone(),
-                    reason,
-                });
-            }
-            if !OPTIONS.contains(&name.as_str()) {
-                return Err(CopyError::UnknownOption {
-                    name: name.clone(),
-                    known: OPTIONS,
-                });
-            }
-        }
-        let sender_id = text("sender_id", required(given, "sender_id")?)?;
-        let receiver_id = text("receiver_id", required(given, "receiver_id")?)?;
-        let date = date(required(given, "date")?)?;
-        let time = time(required(given, "time")?)?;
-        let sender_qualifier = optional_text(given, "sender_qualifier")?;
-        let receiver_qualifier = optional_text(given, "receiver_qualifier")?;
-        let mut envelope = Envelope::new(
-            sender_qualifier.unwrap_or_else(|| "ZZ".to_owned()),
-            sender_id,
-            receiver_qualifier.unwrap_or_else(|| "ZZ".to_owned()),
-            receiver_id,
-            date,
-            time,
-        );
-        if let Some(usage) = optional_text(given, "usage_indicator")? {
-            envelope.usage_indicator = usage;
-        }
-        if let Some(value) = lookup(given, "control_number") {
-            envelope.control_number = control_number(value)?;
-        }
-        envelope.application_sender = optional_text(given, "application_sender")?;
-        envelope.application_receiver = optional_text(given, "application_receiver")?;
-        if let Some(value) = lookup(given, "delimiters") {
-            envelope.delimiters = delimiters(value)?;
-        }
-        if let Some(value) = lookup(given, "line_break") {
-            envelope.line_break = match value.kind {
-                // A bare boolean option means true, as DuckDB's own
-                // options (HEADER) do.
-                Kind::Null => true,
-                Kind::Bool(flag) => flag,
-                _ => return Err(wrong("line_break", value, BOOLEAN)),
-            };
-        }
-        let version = match lookup(given, "version") {
-            Some(value) => match &value.kind {
-                Kind::Text(version) => version.clone(),
-                Kind::Null => return Err(CopyError::NoValue { name: "version" }),
-                _ => return Err(wrong("version", value, VERSION)),
-            },
-            None => DEFAULT_VERSION.to_owned(),
-        };
-        Ok(Settings { envelope, version })
+        reject_unknown(given)?;
+        Ok(Settings {
+            envelope: envelope(given)?,
+            version: version(given)?,
+        })
     }
 }
 
@@ -231,26 +283,27 @@ fn date(value: &OptionValue) -> Result<i32, CopyError> {
 /// text.
 fn time(value: &OptionValue) -> Result<i32, CopyError> {
     match &value.kind {
-        Kind::Time {
-            value: ticks,
-            per_second,
-        } => {
-            if ticks % per_second != 0 {
-                return Err(CopyError::FractionalTime {
-                    value: value.shown.clone(),
-                });
-            }
-            i32::try_from(ticks / per_second)
-                .ok()
-                .filter(|seconds| (0..86_400).contains(seconds))
-                .ok_or_else(|| CopyError::TimeOutOfRange {
-                    value: value.shown.clone(),
-                })
-        }
+        Kind::Time { value: ticks, unit } => clock(*ticks, *unit, &value.shown),
         Kind::Text(text) => parse_time(text).ok_or_else(|| wrong("time", value, TIME)),
         Kind::Null => Err(CopyError::NoValue { name: "time" }),
         _ => Err(wrong("time", value, TIME)),
     }
+}
+
+/// Seconds since midnight of a time of `ticks` counted in `unit`; `shown` is
+/// the value as the caller wrote it.
+fn clock(ticks: i64, unit: TimeUnit, shown: &str) -> Result<i32, CopyError> {
+    let out_of_range = || CopyError::TimeOutOfRange {
+        value: shown.to_owned(),
+    };
+    seconds_from(ticks, unit)
+        .map_err(|error| match error {
+            ConvertError::NotWholeSecond { .. } => CopyError::FractionalTime {
+                value: shown.to_owned(),
+            },
+            _ => out_of_range(),
+        })
+        .and_then(|seconds| time_of_day(i64::from(seconds)).ok_or_else(out_of_range))
 }
 
 /// The delimiters of a STRUCT, with `oxedi.Delimiters`' defaults: `*`, `:`,
@@ -315,7 +368,7 @@ fn delimiters(value: &OptionValue) -> Result<Delimiters, CopyError> {
 }
 
 /// A number of exactly `digits` ASCII digits.
-fn number(text: &str, digits: usize) -> Option<i64> {
+fn number(text: &str, digits: usize) -> Option<i32> {
     (text.len() == digits && text.bytes().all(|byte| byte.is_ascii_digit()))
         .then(|| text.parse().ok())
         .flatten()
@@ -323,51 +376,30 @@ fn number(text: &str, digits: usize) -> Option<i64> {
 
 /// Days since 1970-01-01 of a valid `YYYY-MM-DD` date.
 pub fn parse_date(text: &str) -> Option<i32> {
-    let mut parts = text.split('-');
-    let year = number(parts.next()?, 4)?;
-    let month = number(parts.next()?, 2)?;
-    let day = number(parts.next()?, 2)?;
-    if parts.next().is_some() || !(1..=12).contains(&month) || year == 0 {
+    let fields: Vec<&str> = text.split('-').collect();
+    let [year, month, day] = fields.as_slice() else {
         return None;
-    }
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let length = match month {
-        2 if leap => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
     };
-    if !(1..=length).contains(&day) {
-        return None;
-    }
-    i32::try_from(days_from_civil(year, month, day)).ok()
+    days_from_civil(number(year, 4)?, number(month, 2)?, number(day, 2)?)
 }
 
-/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's
-/// `days_from_civil`).
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let month_index = (month + 9) % 12;
-    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+/// The hour, minute and second fields of `HH:MM`, `HHMM` or `HH:MM:SS`.
+fn clock_fields(text: &str) -> Option<[&str; 3]> {
+    let parts: Vec<&str> = text.split(':').collect();
+    match parts.as_slice() {
+        [hour_minute] => Some([hour_minute.get(..2)?, hour_minute.get(2..)?, "00"]),
+        [hour, minute] => Some([hour, minute, "00"]),
+        [hour, minute, second] => Some([hour, minute, second]),
+        _ => None,
+    }
 }
 
 /// Seconds since midnight of `HH:MM`, `HHMM` or `HH:MM:SS`.
 pub fn parse_time(text: &str) -> Option<i32> {
-    let (hour, minute, second) = match text.len() {
-        4 => (text.get(0..2)?, text.get(2..4)?, "00"),
-        5 if text.as_bytes().get(2) == Some(&b':') => (text.get(0..2)?, text.get(3..5)?, "00"),
-        8 if text.as_bytes().get(2) == Some(&b':') && text.as_bytes().get(5) == Some(&b':') => {
-            (text.get(0..2)?, text.get(3..5)?, text.get(6..8)?)
-        }
-        _ => return None,
-    };
-    let (hour, minute, second) = (number(hour, 2)?, number(minute, 2)?, number(second, 2)?);
-    if hour > 23 || minute > 59 || second > 59 {
+    let [Some(hour), Some(minute), Some(second)] =
+        clock_fields(text)?.map(|field| number(field, 2))
+    else {
         return None;
-    }
-    i32::try_from(hour * 3600 + minute * 60 + second).ok()
+    };
+    seconds_of_day(hour, minute, second)
 }

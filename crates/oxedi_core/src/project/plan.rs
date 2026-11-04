@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 
 use super::carry::Carried;
-use crate::column::ColumnType;
 use crate::spec::{
     ColumnKind, ColumnSource, ElementDef, OccurrenceDef, Pick, Qualifier, Spec, TableDef,
 };
+use crate::value::ColumnType;
 
 /// One defined element, with what checking it needs worked out once.
 #[derive(Debug, Clone)]

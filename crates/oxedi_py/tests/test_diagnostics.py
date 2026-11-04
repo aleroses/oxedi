@@ -174,12 +174,31 @@ def test_external_level_beyond_i64_is_a_value_error(value):
 TRANSITIONS = {"ImplicitLoop", "UnterminatedLoop", "RequiredOccurrenceMissing", "RequiredLoopMissing"}
 
 
+def test_parse_document_gives_the_document_the_spec_and_the_leading_length():
+    data = b"\xef\xbb\xbf\r\n" + read("multi_claim_sample.txt")
+    document, spec, leading = oxedi._core._parse_document(data)
+    parsed = oxedi.parse(data)
+    assert leading == 3 + 2
+    assert spec.to_json() == parsed.spec.to_json()
+    assert document.write() == parsed.document.write() == data
+    patched = oxedi.Spec.builtin().patch({"loops": {"ZZ": {"parent": "1000A", "trigger": {"segment": "N3"}}}})
+    assert oxedi._core._parse_document(data, patched)[1].to_json() == patched.to_json()
+
+
+def test_parse_document_refuses_input_without_an_isa_as_parse_does():
+    with pytest.raises(oxedi.ParseError) as info:
+        oxedi._core._parse_document(b"hello")
+    with pytest.raises(oxedi.ParseError) as expected:
+        oxedi.parse(b"hello")
+    assert str(info.value) == str(expected.value)
+
+
 def test_loop_paths_name_the_loops_parse_names_at_each_segment(file_name):
     result = parse_named(file_name)
     named = [
         d for d in result.diagnostics if d.segment is not None and d.kind not in TRANSITIONS
     ]
-    paths = oxedi._core._loop_paths(result, [d.segment for d in named])
+    paths = oxedi._core._loop_paths(result.document, result.spec, [d.segment for d in named])
     for diagnostic, path in zip(named, paths):
         built = oxedi._core._external_diagnostic("x", "m", 1, segment=diagnostic.segment, path=path)
         assert built.path == diagnostic.path, (diagnostic.segment, str(diagnostic))
@@ -189,28 +208,29 @@ def test_loop_paths_count_instances_from_the_start_of_the_stream():
     result = parse_named("multi_claim_sample.txt")
     document = result.document
     clps = [i for i in range(len(document)) if document[i].id == b"CLP"]
-    paths = oxedi._core._loop_paths(result, [0] + clps)
+    paths = oxedi._core._loop_paths(result.document, result.spec, [0] + clps)
     assert paths[0] == [("interchange", 1)]
     claims = [path[-1] for path in paths[1:]]
     assert claims == [("2100", n) for n in range(1, len(clps) + 1)]
 
 
 def test_loop_paths_of_no_segment_is_empty():
-    assert oxedi._core._loop_paths(parse_named("multi_claim_sample.txt"), []) == []
+    result = parse_named("multi_claim_sample.txt")
+    assert oxedi._core._loop_paths(result.document, result.spec, []) == []
 
 
 def test_loop_paths_keep_the_order_and_repeats_asked_for():
     result = parse_named("multi_claim_sample.txt")
-    every = oxedi._core._loop_paths(result, list(range(len(result.document))))
+    every = oxedi._core._loop_paths(result.document, result.spec, list(range(len(result.document))))
     picked = [5, 0, 5, 2]
-    assert oxedi._core._loop_paths(result, picked) == [every[i] for i in picked]
+    assert oxedi._core._loop_paths(result.document, result.spec, picked) == [every[i] for i in picked]
 
 
 def test_loop_paths_refuse_a_segment_past_the_last():
     result = parse_named("multi_claim_sample.txt")
     count = len(result.document)
     with pytest.raises(ValueError) as info:
-        oxedi._core._loop_paths(result, [0, count])
+        oxedi._core._loop_paths(result.document, result.spec, [0, count])
     assert str(info.value) == (
         f"_loop_paths: segment {count} is past the document's last segment ({count} segments)"
     )

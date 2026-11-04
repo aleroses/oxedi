@@ -30,7 +30,7 @@ def readable(data):
 def text(value):
     """Text cell as ``str``; null and empty are ``None``. Where the library
     tells an element written empty from one the segment stops before,
-    ``written`` asks the document."""
+    ``written`` reads the cell itself."""
     return None if not value else value.decode(ENCODING)
 
 
@@ -103,31 +103,22 @@ def integer(value):
         return value
 
 
-def has(document, index, element, component=None):
-    """Whether segment ``index`` holds the element (and component), even
-    empty. A text cell itself tells the two apart (``""`` written empty,
-    null absent), but this layer reads ``""`` as ``None`` to match the
-    library and asks the document where the library gives the two
-    different values."""
-    if index is None:
-        return False
-    elements = document[index].elements
-    if element > len(elements):
-        return False
-    if component is None:
-        return True
-    value = elements[element - 1]
-    return component <= (len(value) if isinstance(value, list) else 1)
-
-
-def written(value, document, index, element, component=None, empty="", absent=None):
-    """``value``, or for a null cell ``empty`` when the element is written
-    empty and ``absent`` when the segment stops before it (see ``has``)."""
-    if value is not None:
-        return value
-    return empty if has(document, index, element, component) else absent
+def written(cell, convert=text, empty="", absent=None):
+    """A text cell read as the library does: ``convert(cell)`` for text,
+    ``empty`` for an element the segment holds empty (``b""``) and ``absent``
+    for one the segment stops before (null)."""
+    if cell is None:
+        return absent
+    return convert(cell) if cell else empty
 
 
 def name(first, last):
     """``"first last"`` title-cased, with ``None`` spelled out as the library does."""
     return f"{first} {last}".title()
+
+
+def ints(column):
+    """An integer column as a NumPy array, with -1 for null."""
+    import pyarrow.compute as pc
+
+    return pc.fill_null(column, -1).to_numpy()

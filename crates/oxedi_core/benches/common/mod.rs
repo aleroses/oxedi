@@ -1,6 +1,9 @@
 //! Loaders shared by the bench files; each file uses only some of them.
 #![allow(dead_code)]
 
+mod profiler;
+pub use profiler::profiled;
+
 /// The three largest anonymized samples, the engine's workload.
 pub const SAMPLES: &[&str] = &[
     "edi835_test_united.rmt",

@@ -1,9 +1,9 @@
 //! The full text of every finding, origin and write error.
 
-use crate::column::ColumnType;
 use crate::delimiters::IsaError;
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::document::DocumentError;
+use crate::value::{ColumnType, ElementTextError};
 use crate::write::*;
 
 fn cell() -> ValueOrigin {
@@ -111,7 +111,7 @@ fn findings_display_their_full_text() {
                 origin: cell(),
                 place: "DTM02".into(),
                 value: "date32(2147483647)".into(),
-                reason: "a date needs a year from 1 to 9999".into(),
+                reason: ElementTextError::YearOutOfRange,
             },
             "table \"claims\" row 3 column \"claim_id\" holds date32(2147483647), which DTM02 cannot hold: a date needs a year from 1 to 9999",
         ),

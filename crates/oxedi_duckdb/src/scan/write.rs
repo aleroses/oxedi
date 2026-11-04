@@ -3,13 +3,14 @@
 use std::ffi::c_char;
 
 use libduckdb_sys as ffi;
+use oxedi_core::value::TimeUnit;
 use oxedi_core::{Cell, Column, ColumnData};
 
 use crate::error::ReadError;
 use crate::types::SqlType;
 
 /// Microseconds in a second: DuckDB's `TIME` counts microseconds.
-const MICROS_PER_SECOND: i64 = 1_000_000;
+const MICROS_PER_SECOND: i64 = TimeUnit::Microsecond.ticks_per_second();
 
 /// Where a cell came from, for error messages.
 pub struct Place<'a> {

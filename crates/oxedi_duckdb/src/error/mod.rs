@@ -62,10 +62,8 @@ pub enum ReadError {
     },
     /// `version` names no built-in spec.
     UnknownVersion {
-        /// The version given.
-        version: String,
-        /// The versions of the built-in specs.
-        known: Vec<&'static str>,
+        /// The core's account of the version given and the versions there are.
+        source: oxedi_core::UnknownVersion,
     },
     /// A glob pattern was given while the caller's `enable_external_access`
     /// is off, so it may not be expanded.
@@ -272,6 +270,12 @@ pub(crate) fn macro_hint(parameter: Option<&str>, value: &str) -> (String, Strin
     }
 }
 
+impl From<oxedi_core::UnknownVersion> for ReadError {
+    fn from(source: oxedi_core::UnknownVersion) -> ReadError {
+        ReadError::UnknownVersion { source }
+    }
+}
+
 impl fmt::Display for ReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -324,11 +328,7 @@ impl fmt::Display for ReadError {
                 "{FUNCTION}: unknown table {table:?}; table_name must be one of {}",
                 quoted(known)
             ),
-            ReadError::UnknownVersion { version, known } => write!(
-                f,
-                "{FUNCTION}: unknown version {version:?}; version must be one of {}",
-                quoted(known)
-            ),
+            ReadError::UnknownVersion { source } => write!(f, "{FUNCTION}: {source}"),
             ReadError::PatternWithoutExternalAccess { pattern } => write!(
                 f,
                 "{FUNCTION}: the pattern {pattern:?} cannot be expanded while \
@@ -399,8 +399,8 @@ impl fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // `Parse` and `Mask` print the core error in full, so the chain
-        // stops here instead of printing it a second time.
+        // `Parse`, `Mask` and `UnknownVersion` print the core error in
+        // full, so the chain stops here instead of printing it a second time.
         match self {
             ReadError::PathType { .. }
             | ReadError::NullPath { .. }

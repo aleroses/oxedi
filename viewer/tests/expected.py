@@ -88,7 +88,7 @@ def expected(path: pathlib.Path) -> dict[str, object]:
         "file": relative,
         "spec_version": values[0],
         "segments": len(result.document),
-        "segment_paths": _loop_paths(result, list(range(len(result.document)))),
+        "segment_paths": _loop_paths(result.document, result.spec, list(range(len(result.document)))),
         "tables": tables_of(result, relative),
         "masked_tables": tables_of(masked, relative),
         "masked_diagnostics": [str(d) for d in masked.diagnostics],

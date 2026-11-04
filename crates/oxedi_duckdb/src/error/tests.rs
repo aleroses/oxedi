@@ -114,8 +114,7 @@ fn unknown_table() {
 fn unknown_version() {
     assert_eq!(
         text(ReadError::UnknownVersion {
-            version: "3070".to_owned(),
-            known: vec!["5010", "4010"],
+            source: oxedi_core::Builtin::find_text("835", "3070").unwrap_err(),
         }),
         "read_835: unknown version \"3070\"; version must be one of \"5010\", \"4010\""
     );
@@ -232,7 +231,10 @@ fn no_read_error_has_a_source() {
         file: "a.835".to_owned(),
         message: "denied".to_owned(),
     };
-    for error in [ReadError::EmptyPathList, mask, parse, open] {
+    let version = ReadError::UnknownVersion {
+        source: oxedi_core::Builtin::find_text("835", "3070").unwrap_err(),
+    };
+    for error in [ReadError::EmptyPathList, mask, parse, open, version] {
         assert!(error.source().is_none(), "{error}");
     }
 }

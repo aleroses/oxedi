@@ -18,12 +18,16 @@ and the extension has its own version.
   `parent` (the table a reference column points at, else NULL) and `position`, without a file.
 
 ### Changed
+- Without `table_name`, `read_835` returns the table the chosen spec declares as its
+  `default_table` (`claims` for the built-in 835, as before).
 - `read_835` fills only the table it reads instead of every table of the spec and then keeping
   one, so each scan of one table takes about a fifth less time (900 files, 127 MB, one thread:
   `table_name := 'claims'` from 4.6 s to 3.6 s). The rows are unchanged, and the `diagnostics`
   table is unchanged.
 
 ### Fixed
+- `COPY ... (FORMAT edi835)` accepts a zero decimal that only scales up and names an
+  overflowing scale as an overflow.
 - The macro-parameter error of `read_835` and `oxedi_schema` names the parameter only when
   DuckDB's qualified name has a single dot; with more dots the macro's name may contain a dot too,
   so the error says `write table_name = <the parameter>` instead of guessing.

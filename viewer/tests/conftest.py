@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import functools
 import http.server
+import os
 import pathlib
 import threading
+from collections.abc import Mapping
 
 import pytest
 from playwright.sync_api import expect
@@ -32,6 +34,19 @@ document.addEventListener('securitypolicyviolation', (e) => {
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+
+def chromium_launch_args(launch_args: dict, environ: Mapping[str, str]) -> dict:
+    """Adds --no-sandbox only when OXEDI_CHROMIUM_NO_SANDBOX is exactly "1", which only the sandbox
+    image sets: the container is the sandbox there. Existing args are kept."""
+    if environ.get("OXEDI_CHROMIUM_NO_SANDBOX") != "1":
+        return launch_args
+    return {**launch_args, "args": [*launch_args.get("args", []), "--no-sandbox"]}
+
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args: dict) -> dict:
+    return chromium_launch_args(browser_type_launch_args, os.environ)
 
 
 @pytest.fixture(scope="session")

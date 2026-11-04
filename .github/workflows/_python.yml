@@ -18,6 +18,8 @@ jobs:
         python: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # One key for both legs: the module is abi3, so they compile the same artifacts.
       - uses: ./.github/actions/setup-rust
         with:
@@ -27,7 +29,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache-suffix: python
       - name: Tools
-        run: uv pip install "maturin>=1.9.4,<2" pytest polars pyarrow pandas "edi-835-parser==1.8.0" duckdb "pyx12>=4.0,<5" mypy pandas-stubs pyarrow-stubs
+        run: uv pip install "maturin>=1.9.4,<2" --group crates/oxedi_py/pyproject.toml:test "pyx12>=4.0,<4.0.1" mypy pandas-stubs pyarrow-stubs
       - name: Build
         run: maturin develop --uv --release --manifest-path crates/oxedi_py/Cargo.toml
       - name: Spec against pyx12's maps
@@ -62,6 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: python-pyarrow-floor

@@ -2,7 +2,7 @@
 //! with the attributes of the Python `Diagnostic`, and one row per file that
 //! could not be parsed when `ignore_errors` is on.
 
-use oxedi_core::{Cell, ColumnType, Diagnostic, DocumentError, IsaError, Rule, SnipLevel, Table};
+use oxedi_core::{Cell, ColumnType, Diagnostic, DocumentError, FlatDiagnostic, Table};
 
 use crate::error::ReadError;
 use crate::types::SqlType;
@@ -10,54 +10,48 @@ use crate::types::SqlType;
 /// The name `table_name` gives the table.
 pub const TABLE: &str = "diagnostics";
 
-/// Who reports the parser's own findings, as the Python binding names it.
-const PARSER_ORIGIN: &str = "oxedi";
-
 /// Who reports a file that could not be parsed.
 const READER_ORIGIN: &str = "read_835";
 
 /// The kind of the row of a file that could not be parsed.
 const UNPARSABLE_KIND: &str = "NotAnInterchange";
 
-/// The most bytes of a truncated ISA kept as the datum: an ISA's length.
-const ISA_LEN: usize = 106;
-
-/// The bytes a UTF-8 byte order mark takes.
-const BOM_LEN: usize = 3;
-
-/// Each column's name, core type and whether its text is always valid
-/// UTF-8 (so a VARCHAR even with `binary := true`), in order.
-const COLUMNS: [(&str, ColumnType, bool); 10] = [
-    ("level", ColumnType::Int64 { scale: 0 }, false),
-    ("kind", ColumnType::Binary, true),
-    ("rule", ColumnType::Binary, true),
-    ("segment", ColumnType::Int64 { scale: 0 }, false),
-    ("element", ColumnType::Int64 { scale: 0 }, false),
-    ("component", ColumnType::Int64 { scale: 0 }, false),
-    ("path", ColumnType::Binary, true),
-    ("datum", ColumnType::Binary, false),
-    ("origin", ColumnType::Binary, true),
-    ("code", ColumnType::Binary, true),
+/// Each column's core type and whether its text is always valid UTF-8 (so a
+/// VARCHAR even with `binary := true`), in the order of
+/// `FlatDiagnostic::FIELDS`.
+const COLUMNS: [(ColumnType, bool); 10] = [
+    (ColumnType::Int64 { scale: 0 }, false),
+    (ColumnType::Binary, true),
+    (ColumnType::Binary, true),
+    (ColumnType::Int64 { scale: 0 }, false),
+    (ColumnType::Int64 { scale: 0 }, false),
+    (ColumnType::Int64 { scale: 0 }, false),
+    (ColumnType::Binary, true),
+    (ColumnType::Binary, false),
+    (ColumnType::Binary, true),
+    (ColumnType::Binary, true),
 ];
 
 /// The table's columns: name and core type.
 pub fn columns() -> Vec<(String, ColumnType)> {
-    COLUMNS
+    FlatDiagnostic::FIELDS
         .iter()
-        .map(|(name, kind, _)| ((*name).to_owned(), *kind))
+        .zip(COLUMNS)
+        .map(|(name, (kind, _))| ((*name).to_owned(), kind))
         .collect()
 }
 
 /// The DuckDB type of each column: `datum` follows `binary`, the other text
 /// columns are always VARCHAR.
 pub fn types(binary: bool) -> Result<Vec<SqlType>, ReadError> {
-    COLUMNS
+    FlatDiagnostic::FIELDS
         .iter()
-        .map(|(name, kind, text)| {
-            if *text {
+        .zip(COLUMNS)
+        .map(|(name, (kind, text))| {
+            if text {
                 Ok(SqlType::Varchar)
             } else {
-                SqlType::of(TABLE, name, *kind, binary)
+                SqlType::of(TABLE, name, kind, binary)
             }
         })
         .collect()
@@ -76,14 +70,6 @@ fn position(value: Option<usize>) -> Cell<'static> {
         .map_or(Cell::Null, Cell::Int64)
 }
 
-fn level(level: SnipLevel) -> i64 {
-    match level {
-        SnipLevel::L1 => 1,
-        SnipLevel::L2 => 2,
-        SnipLevel::L3 => 3,
-    }
-}
-
 /// Appends one row; a row the table refuses is an internal error naming the
 /// table.
 fn push(table: &mut Table, cells: &[Cell<'_>]) -> Result<(), ReadError> {
@@ -96,30 +82,21 @@ fn push(table: &mut Table, cells: &[Cell<'_>]) -> Result<(), ReadError> {
 pub fn of_findings(diagnostics: &[Diagnostic]) -> Result<Table, ReadError> {
     let mut table = empty();
     for diagnostic in diagnostics {
-        let (origin, code) = match &diagnostic.rule {
-            Rule::External { origin, code, .. } => (origin.as_str(), code.as_deref()),
-            _ => (PARSER_ORIGIN, None),
-        };
-        let rule = diagnostic.rule.to_string();
-        let path = diagnostic
-            .path
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("/");
+        let flat = diagnostic.flat();
         push(
             &mut table,
             &[
-                Cell::Int64(level(diagnostic.level)),
-                Cell::Binary(diagnostic.rule.kind().as_bytes()),
-                Cell::Binary(rule.as_bytes()),
-                position(diagnostic.segment),
-                position(diagnostic.element),
-                position(diagnostic.component),
-                Cell::Binary(path.as_bytes()),
-                Cell::Binary(&diagnostic.datum),
-                Cell::Binary(origin.as_bytes()),
-                code.map_or(Cell::Null, |code| Cell::Binary(code.as_bytes())),
+                Cell::Int64(i64::from(flat.level)),
+                Cell::Binary(flat.kind.as_bytes()),
+                Cell::Binary(flat.rule.as_bytes()),
+                position(flat.segment),
+                position(flat.element),
+                position(flat.component),
+                Cell::Binary(flat.path.as_bytes()),
+                Cell::Binary(flat.datum),
+                Cell::Binary(flat.origin.as_bytes()),
+                flat.code
+                    .map_or(Cell::Null, |code| Cell::Binary(code.as_bytes())),
             ],
         )?;
     }
@@ -130,16 +107,7 @@ pub fn of_findings(diagnostics: &[Diagnostic]) -> Result<Table, ReadError> {
 /// start of a truncated ISA, or nothing for a file too long to index.
 pub fn datum<'a>(error: &'a DocumentError, bytes: &'a [u8]) -> &'a [u8] {
     match error {
-        DocumentError::Isa(IsaError::NotIsa { found, .. }) => found,
-        DocumentError::Isa(IsaError::Truncated {
-            byte_order_mark,
-            whitespace,
-            ..
-        }) => {
-            let skipped = if *byte_order_mark { BOM_LEN } else { 0 }.saturating_add(*whitespace);
-            let rest = bytes.get(skipped..).unwrap_or_default();
-            rest.get(..ISA_LEN).unwrap_or(rest)
-        }
+        DocumentError::Isa(error) => error.datum(bytes),
         DocumentError::Size(_) => &[],
     }
 }

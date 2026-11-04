@@ -6,7 +6,10 @@ updates:
     # The workflows, and the composite actions they call.
     directories: ["/", "/.github/actions/*"]
     schedule:
-      interval: monthly
+      interval: weekly
+    # A release is not proposed until it has been out for a week.
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -15,6 +18,8 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     ignore:
       # Pinned exactly: upgraded by hand after checking that the DuckDB C API it targets has no
       # unstable tail we would call (stable ABI, C_STRUCT).

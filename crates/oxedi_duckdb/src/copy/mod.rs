@@ -29,7 +29,7 @@ mod read;
 mod sink;
 
 use std::ffi::{CStr, CString};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use libduckdb_sys as ffi;
 use oxedi_core::write::{Envelope, write};
@@ -115,6 +115,25 @@ struct State {
     tables: Mutex<Vec<Table>>,
 }
 
+impl State {
+    /// The tables built so far, locked.
+    fn lock(&self) -> Result<MutexGuard<'_, Vec<Table>>, CopyError> {
+        self.tables.lock().map_err(|_| CopyError::Internal {
+            message: "the tables were poisoned by an earlier panic".to_owned(),
+        })
+    }
+}
+
+/// The bind data and the global state a callback received, both required.
+fn parts<'a>(
+    bound: Option<&'a Bound>,
+    state: Option<&'a State>,
+) -> Result<(&'a Bound, &'a State), CopyError> {
+    let bound = bound.ok_or_else(|| missing("bind data"))?;
+    let state = state.ok_or_else(|| missing("global state"))?;
+    Ok((bound, state))
+}
+
 fn missing(what: &str) -> CopyError {
     CopyError::Internal {
         message: format!("DuckDB gave no {what}"),
@@ -128,6 +147,30 @@ unsafe extern "C" fn bind(info: ffi::duckdb_copy_function_bind_info) {
         // SAFETY: as above; DuckDB copies the message.
         unsafe { ffi::duckdb_copy_function_bind_set_error(info, message.as_ptr()) };
     }
+}
+
+/// The type of each column the `COPY` writes.
+///
+/// # Safety
+///
+/// `info` must be the live bind info of the `edi835` copy format.
+unsafe fn input_columns(
+    info: ffi::duckdb_copy_function_bind_info,
+) -> Result<Vec<input::InputColumn>, CopyError> {
+    // SAFETY: `info` is live (caller contract).
+    let count = unsafe { ffi::duckdb_copy_function_bind_get_column_count(info) };
+    (0..count)
+        .map(|index| {
+            // SAFETY: `index` is below the column count; the type returned is
+            // owned by the guard, which destroys it.
+            let kind = unsafe {
+                LogicalType::owned(ffi::duckdb_copy_function_bind_get_column_type(info, index))
+            }
+            .ok_or_else(|| missing("column type"))?;
+            // SAFETY: `kind` is live.
+            Ok(unsafe { input::column_of(&kind) })
+        })
+        .collect()
 }
 
 /// # Safety
@@ -145,31 +188,13 @@ unsafe fn bind_with(info: ffi::duckdb_copy_function_bind_info) -> Result<(), Cop
     // SAFETY: `info` is the live bind info (caller contract).
     let given = unsafe { read::options(info) };
     let settings = Settings::parse(&given)?;
-    let builtin =
-        builtins
-            .by_version(&settings.version)
-            .ok_or_else(|| CopyError::UnknownVersion {
-                version: settings.version.clone(),
-                known: builtins.versions(),
-            })?;
+    let builtin = builtins.by_version(&settings.version)?;
     // SAFETY: `info` is live (caller contract).
-    let count = unsafe { ffi::duckdb_copy_function_bind_get_column_count(info) };
-    let columns = (0..count)
-        .map(|index| {
-            // SAFETY: `index` is below the column count; the type returned is
-            // owned by the guard, which destroys it.
-            let kind = unsafe {
-                LogicalType::owned(ffi::duckdb_copy_function_bind_get_column_type(info, index))
-            }
-            .ok_or_else(|| missing("column type"))?;
-            // SAFETY: `kind` is live.
-            Ok(unsafe { input::column_of(&kind) })
-        })
-        .collect::<Result<Vec<_>, CopyError>>()?;
+    let columns = unsafe { input_columns(info) }?;
     let tables = input::bind(builtin, &columns)?;
     let bound = Bound {
         builtins: Arc::clone(builtins),
-        version: builtin.version,
+        version: builtin.version(),
         envelope: settings.envelope,
         tables,
         target: Mutex::new(None),
@@ -271,11 +296,8 @@ unsafe extern "C" fn sink(
                     .as_ref(),
             )
         };
-        let bound = bound.ok_or_else(|| missing("bind data"))?;
-        let state = state.ok_or_else(|| missing("global state"))?;
-        let mut tables = state.tables.lock().map_err(|_| CopyError::Internal {
-            message: "the tables were poisoned by an earlier panic".to_owned(),
-        })?;
+        let (bound, state) = parts(bound, state)?;
+        let mut tables = state.lock()?;
         // SAFETY: `input` is the flattened chunk of the bound tables.
         unsafe { sink::append(input, &bound.tables, &mut tables) }
     });
@@ -311,17 +333,28 @@ unsafe fn finalize_with(info: ffi::duckdb_copy_function_finalize_info) -> Result
                 .as_ref(),
         )
     };
-    let bound = bound.ok_or_else(|| missing("bind data"))?;
-    let state = state.ok_or_else(|| missing("global state"))?;
-    let tables = std::mem::take(&mut *state.tables.lock().map_err(|_| CopyError::Internal {
-        message: "the tables were poisoned by an earlier panic".to_owned(),
-    })?);
+    let (bound, state) = parts(bound, state)?;
+    let tables = std::mem::take(&mut *state.lock()?);
     let builtin = bound
         .builtins
         .by_version(bound.version)
-        .ok_or_else(|| missing("built-in spec of the bound version"))?;
+        .map_err(|_| missing("built-in spec of the bound version"))?;
     let bytes =
-        write(&builtin.spec, &Tables::new(tables), &bound.envelope).map_err(CopyError::Write)?;
+        write(builtin.spec(), &Tables::new(tables), &bound.envelope).map_err(CopyError::Write)?;
+    // SAFETY: `info` is live (caller contract).
+    unsafe { write_file(info, &state.path, &bytes) }
+}
+
+/// Writes `bytes` to `path` through the file system of the call.
+///
+/// # Safety
+///
+/// `info` must be the live finalize info of the `edi835` copy format.
+unsafe fn write_file(
+    info: ffi::duckdb_copy_function_finalize_info,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), CopyError> {
     // SAFETY: `info` is live (caller contract); the wrapper is owned here
     // and dropped before this function returns.
     let context = unsafe {
@@ -332,9 +365,9 @@ unsafe fn finalize_with(info: ffi::duckdb_copy_function_finalize_info) -> Result
         .file_system()
         .ok_or_else(|| missing("file system"))?;
     file_system
-        .write_all(&state.path, &bytes)
+        .write_all(path, bytes)
         .map_err(|failure| CopyError::Output {
-            path: state.path.clone(),
+            path: path.to_owned(),
             step: failure.step,
             message: failure.message,
         })

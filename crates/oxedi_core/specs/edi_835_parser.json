@@ -1,5 +1,7 @@
 {
   "name": "edi_835_parser",
+  "summaries": null,
+  "default_table": null,
   "segments": {
     "SVC": { "elements": {
       "5": {"name": "units_of_service_paid_count", "type": "AN", "min": 1, "max": 15},

@@ -46,7 +46,7 @@ fn tables_and_diagnostics_match_the_golden_files() {
     for (name, bytes, delims) in common::all_files() {
         let spec = common::select(&five, &four, &bytes, delims);
         let document = Document::with_delimiters(&bytes[..], delims).unwrap();
-        let (tables, diagnostics) = Processor::run(spec, &document);
+        let (tables, diagnostics) = Processor::run(spec, &document, None);
         outputs.push(if common::SUMMARY_ONLY.contains(&name.as_str()) {
             (
                 golden_dir().join(format!("{name}.tables.summary.txt")),
@@ -78,7 +78,7 @@ fn edi_835_parser_tables_match_the_golden_files() {
     let mut outputs = Vec::new();
     for (name, bytes, delims) in common::all_files() {
         let document = Document::with_delimiters(&bytes[..], delims).unwrap();
-        let (tables, _) = Processor::run(&spec, &document);
+        let (tables, _) = Processor::run(&spec, &document, None);
         outputs.push(if common::SUMMARY_ONLY.contains(&name.as_str()) {
             (
                 dir.join(format!("{name}.tables.summary.txt")),
@@ -111,7 +111,7 @@ fn masked_tables_and_diagnostics_match_the_golden_files() {
             runs.push((format!("{name}.shift"), &shift));
         }
         for (label, mask) in runs {
-            let (tables, diagnostics) = Processor::run_masked(spec, &document, mask);
+            let (tables, diagnostics) = Processor::run(spec, &document, Some(mask));
             outputs.push(if common::SUMMARY_ONLY.contains(&name.as_str()) {
                 (
                     dir.join(format!("{label}.tables.summary.txt")),

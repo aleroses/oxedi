@@ -9,6 +9,45 @@ This file covers the Python package; the DuckDB extension has its own changelog 
 
 ## [Unreleased]
 
+### Added
+- `oxedi.Version` (`V5010`, `V4010`, with `text` and `str()`): the X12 release of a built-in spec.
+- `Spec.DEFAULT_VERSION`: the `Version` of the default built-in spec, the default of `Spec.builtin`.
+- `Envelope.DEFAULT_QUALIFIER`, `Envelope.DEFAULT_USAGE_INDICATOR` and `Envelope.DEFAULT_CONTROL_NUMBER`:
+  the defaults of `sender_qualifier`, `receiver_qualifier`, `usage_indicator` and `control_number`.
+- A spec declares `summaries` (named `count`, `distinct`, `sum` and `row` figures over its tables)
+  and a `default_table`. The built-in 835 declares `count_claims`, `count_patients`,
+  `sum_payments`, `payer` and `payee`, and `claims` as its default table; `Result.count_claims()`,
+  `count_patients()`, `sum_payments()`, `payer` and `payee` read those summaries.
+- `Segment.element(position, component=None)` and `Segment.has(position, component=None)`: read an
+  element or one of its components by 1-based position, `None` or `False` where the segment has
+  no such place.
+
+### Changed
+- The `pyx12` extra now requires pyx12 below 4.0.1, because 4.0.1 reports findings in a shape
+  `oxedi.pyx12` does not read yet.
+- `oxedi.pyx12.validate` indexes the file and selects the spec without projecting the tables, so it
+  is faster; its findings are unchanged.
+- A spec patch that removes a table or column a summary reads must also remove the summary (with
+  `null`): otherwise `Spec.patch` raises `SpecError`, naming the summary, where in it the table or
+  column is named and what the spec declares instead. Before, the patch loaded and the summary
+  method failed when called.
+- The errors of the summary methods name the summary: `KeyError` when the spec declares no such
+  summary or the tables lack what it reads, `TypeError` when the spec declares another kind of
+  summary under the method's name, `ValueError` for `payer` and `payee` over other than one
+  transaction and for a sum that overflows. Each reads `Result.<method>: <reason>`, for example
+  `Result.payer: summary "payer" reads the one row of the table "payments", which has 2 rows`.
+- An unknown key in a spec now also lists the keys allowed there, for example
+  `spec: unknown key "tabels" at the top level; the allowed keys are: balancing, default_table, loops, name, segments, summaries, tables, version`.
+- The `test` extra is gone (`pip install "oxedi[test]"` no longer resolves): it was a contributor
+  list, not a feature. Contributors install the test tools from the package's dependency group:
+  `uv pip install --group crates/oxedi_py/pyproject.toml:test`, or `make venv`.
+- Introspecting `Envelope` at runtime shows the defaults of `sender_qualifier`, `receiver_qualifier`,
+  `usage_indicator` and `control_number` as `...`; their values are the `Envelope.DEFAULT_*` class
+  attributes.
+- `Spec.builtin` takes a `Version` (the text, such as `"4010"`, is still accepted); introspecting it at
+  runtime shows the default of `version` as `...`, its value is `Spec.DEFAULT_VERSION`. The `ValueError` for a version no built-in covers now reads
+  `Spec.builtin(version="6020"): unknown version "6020"; version must be one of "5010", "4010"`.
+
 ## [0.6.0] - 2026-10-18
 
 ### Added

@@ -36,5 +36,9 @@ fn check_samples(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, check_samples);
+criterion_group! {
+    name = benches;
+    config = common::profiled();
+    targets = check_samples
+}
 criterion_main!(benches);

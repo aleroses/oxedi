@@ -8,10 +8,11 @@
 
 use libduckdb_sys as ffi;
 use oxedi_core::ColumnType;
+use oxedi_core::value::TimeUnit;
 use oxedi_core::write::WriteError;
 
 use super::error::CopyError;
-use crate::builtins::{Builtin, BuiltinTable};
+use crate::builtins::{BuiltinSchema, BuiltinTable};
 use crate::types::LogicalType;
 use crate::value::{primitive_name, take_text};
 
@@ -47,7 +48,7 @@ pub enum FieldType {
     /// `TIME_NS`, nanoseconds.
     TimeNs,
     /// A `TIMESTAMP` without a time zone, in the unit given.
-    Timestamp(Unit),
+    Timestamp(TimeUnit),
     /// Any other type.
     Other,
 }
@@ -76,15 +77,6 @@ pub enum Integer {
     U32,
     U64,
     U128,
-}
-
-/// A timestamp's unit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unit {
-    Second,
-    Milli,
-    Micro,
-    Nano,
 }
 
 impl FieldType {
@@ -170,7 +162,10 @@ pub struct BoundTable {
 /// Binds the query's columns, which must be one STRUCT keyed by table, to
 /// the tables of `builtin`; one bound table per field of the STRUCT, in its
 /// order.
-pub fn bind(builtin: &Builtin, columns: &[InputColumn]) -> Result<Vec<BoundTable>, CopyError> {
+pub fn bind(
+    builtin: &BuiltinSchema,
+    columns: &[InputColumn],
+) -> Result<Vec<BoundTable>, CopyError> {
     let fields = match columns {
         [InputColumn::Tables(fields)] => fields,
         [InputColumn::Other(found)] => {
@@ -387,6 +382,21 @@ unsafe fn dictionary(logical_type: ffi::duckdb_logical_type) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// An `ENUM` field by the width of its index.
+///
+/// # Safety
+///
+/// `logical_type` must be a live `ENUM` type.
+unsafe fn enum_type(logical_type: ffi::duckdb_logical_type) -> FieldType {
+    // SAFETY: the type is a live ENUM (caller contract).
+    match unsafe { ffi::duckdb_enum_internal_type(logical_type) } {
+        ffi::DUCKDB_TYPE_DUCKDB_TYPE_UTINYINT => FieldType::Enum(EnumIndex::U8),
+        ffi::DUCKDB_TYPE_DUCKDB_TYPE_USMALLINT => FieldType::Enum(EnumIndex::U16),
+        ffi::DUCKDB_TYPE_DUCKDB_TYPE_UINTEGER => FieldType::Enum(EnumIndex::U32),
+        _ => FieldType::Other,
+    }
+}
+
 /// The field type of a logical type.
 ///
 /// # Safety
@@ -400,14 +410,7 @@ unsafe fn field_type(logical_type: ffi::duckdb_logical_type) -> FieldType {
         ffi::DUCKDB_TYPE_DUCKDB_TYPE_VARCHAR => FieldType::Varchar,
         ffi::DUCKDB_TYPE_DUCKDB_TYPE_BLOB => FieldType::Blob,
         // SAFETY: the type is a live ENUM.
-        ffi::DUCKDB_TYPE_DUCKDB_TYPE_ENUM => {
-            match unsafe { ffi::duckdb_enum_internal_type(logical_type) } {
-                ffi::DUCKDB_TYPE_DUCKDB_TYPE_UTINYINT => FieldType::Enum(EnumIndex::U8),
-                ffi::DUCKDB_TYPE_DUCKDB_TYPE_USMALLINT => FieldType::Enum(EnumIndex::U16),
-                ffi::DUCKDB_TYPE_DUCKDB_TYPE_UINTEGER => FieldType::Enum(EnumIndex::U32),
-                _ => FieldType::Other,
-            }
-        }
+        ffi::DUCKDB_TYPE_DUCKDB_TYPE_ENUM => unsafe { enum_type(logical_type) },
         ffi::DUCKDB_TYPE_DUCKDB_TYPE_TINYINT => FieldType::Integer(Integer::I8),
         ffi::DUCKDB_TYPE_DUCKDB_TYPE_SMALLINT => FieldType::Integer(Integer::I16),
         ffi::DUCKDB_TYPE_DUCKDB_TYPE_INTEGER => FieldType::Integer(Integer::I32),
@@ -429,10 +432,10 @@ unsafe fn field_type(logical_type: ffi::duckdb_logical_type) -> FieldType {
         ffi::DUCKDB_TYPE_DUCKDB_TYPE_DATE => FieldType::Date,
         ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIME => FieldType::Time,
         ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIME_NS => FieldType::TimeNs,
-        ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIMESTAMP_S => FieldType::Timestamp(Unit::Second),
-        ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIMESTAMP_MS => FieldType::Timestamp(Unit::Milli),
-        ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIMESTAMP => FieldType::Timestamp(Unit::Micro),
-        ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIMESTAMP_NS => FieldType::Timestamp(Unit::Nano),
+        ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIMESTAMP_S => FieldType::Timestamp(TimeUnit::Second),
+        ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIMESTAMP_MS => FieldType::Timestamp(TimeUnit::Millisecond),
+        ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIMESTAMP => FieldType::Timestamp(TimeUnit::Microsecond),
+        ffi::DUCKDB_TYPE_DUCKDB_TYPE_TIMESTAMP_NS => FieldType::Timestamp(TimeUnit::Nanosecond),
         _ => FieldType::Other,
     }
 }

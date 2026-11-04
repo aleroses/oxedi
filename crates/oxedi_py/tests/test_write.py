@@ -3,6 +3,7 @@
 import collections
 import datetime
 import importlib.util
+import inspect
 import re
 
 import pyarrow
@@ -410,3 +411,72 @@ def test_a_reference_against_the_parent_chain_is_a_finding():
     [finding] = info.value.findings
     assert finding.kind == "MismatchedReference"
     assert (finding.table, finding.row, finding.column) == ("services", 0, "payment")
+
+
+def test_envelope_defaults_are_the_core_constants():
+    envelope_ = oxedi.Envelope(
+        sender_id="S", receiver_id="R", date=datetime.date(2024, 1, 1), time=datetime.time(1)
+    )
+    assert oxedi.Envelope.DEFAULT_QUALIFIER == "ZZ"
+    assert oxedi.Envelope.DEFAULT_USAGE_INDICATOR == "P"
+    assert oxedi.Envelope.DEFAULT_CONTROL_NUMBER == 1
+    assert envelope_.sender_qualifier == oxedi.Envelope.DEFAULT_QUALIFIER
+    assert envelope_.receiver_qualifier == oxedi.Envelope.DEFAULT_QUALIFIER
+    assert envelope_.usage_indicator == oxedi.Envelope.DEFAULT_USAGE_INDICATOR
+    assert envelope_.control_number == oxedi.Envelope.DEFAULT_CONTROL_NUMBER
+    assert envelope_.date == datetime.date(2024, 1, 1)
+    assert envelope_.time == datetime.time(1)
+
+
+class _Stamp:
+    """A date or time the way a `datetime` exposes it, with values `datetime` refuses."""
+
+    tzinfo = None
+    microsecond = 0
+
+    def __init__(self, shown, **parts):
+        self.shown = shown
+        self.__dict__.update(parts)
+
+    def __str__(self):
+        return self.shown
+
+
+def test_a_time_past_the_end_of_the_day_is_out_of_range():
+    stamp = _Stamp("24:00:00", hour=24, minute=0, second=0)
+    with pytest.raises(ValueError, match="time 24:00:00 is out of range"):
+        oxedi.Envelope(sender_id="S", receiver_id="R", date=datetime.date(2024, 1, 1), time=stamp)
+
+
+def test_a_date_past_year_9999_is_out_of_range():
+    stamp = _Stamp("10000-01-01", year=10000, month=1, day=1)
+    with pytest.raises(ValueError, match="date 10000-01-01 is out of range"):
+        oxedi.Envelope(sender_id="S", receiver_id="R", date=stamp, time=datetime.time(1))
+
+
+def test_envelope_runtime_parameters_are_pinned():
+    # stubtest allows the defaults' runtime text (`...`); the parameters stay pinned here.
+    parameters = inspect.signature(oxedi.Envelope).parameters
+    assert list(parameters) == [
+        "sender_id",
+        "receiver_id",
+        "date",
+        "time",
+        "sender_qualifier",
+        "receiver_qualifier",
+        "usage_indicator",
+        "control_number",
+        "application_sender",
+        "application_receiver",
+        "delimiters",
+        "line_break",
+    ]
+    assert {p.kind for p in parameters.values()} == {inspect.Parameter.KEYWORD_ONLY}
+    # The four defaults backed by core constants show as `...`; the rest show their value.
+    defaults = {name: parameter.default for name, parameter in parameters.items()}
+    for name in ("sender_qualifier", "receiver_qualifier", "usage_indicator", "control_number"):
+        assert defaults[name] is Ellipsis, name
+    assert defaults["application_sender"] is None
+    assert defaults["application_receiver"] is None
+    assert defaults["delimiters"] is None
+    assert defaults["line_break"] is False

@@ -1,0 +1,7 @@
+rules:
+  # The workflows call their own actions and reusable workflows as `./...`. The `$/...` form this
+  # audit asks for is rejected by actionlint 1.7.12, which would fail the lint. No workflow uses
+  # pull_request_target, and the dangerous-triggers audit still reports one if it is added.
+  # Enable the audit again once actionlint accepts `$/`.
+  self-repository:
+    disable: true

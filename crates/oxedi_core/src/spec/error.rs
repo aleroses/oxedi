@@ -3,9 +3,11 @@
 use std::fmt;
 
 use super::balance_error::BalanceError;
+use super::error_text::{Under, write_ambiguous, write_cycle};
 use super::loops::ControlError;
 use super::occurrence_error::OccurrenceError;
 use super::segments::ElementDefError;
+use super::summary_error::SummaryDefError;
 use super::table_error::TableDefError;
 use super::version::VersionError;
 
@@ -96,6 +98,8 @@ pub enum SpecError {
         path: String,
         /// The key as written.
         key: String,
+        /// The keys the object may hold there, in alphabetical order.
+        allowed: Vec<&'static str>,
     },
     /// An object lacks a key its schema requires.
     MissingKey {
@@ -253,6 +257,27 @@ pub enum SpecError {
         /// The second loop's trigger, written the same way.
         conditions_b: String,
     },
+    /// A summary does not match the schema.
+    SummarySchema {
+        /// The summary name as written.
+        summary: String,
+        /// What serde rejected.
+        source: serde_json::Error,
+    },
+    /// A summary is invalid.
+    BadSummary {
+        /// The summary name as written.
+        summary: String,
+        /// What is wrong with it.
+        reason: Box<SummaryDefError>,
+    },
+    /// `default_table` names a table the spec does not define.
+    UnknownDefaultTable {
+        /// The table as written.
+        table: String,
+        /// The tables the spec defines, in name order.
+        known: Vec<String>,
+    },
 }
 
 impl fmt::Display for SpecError {
@@ -292,12 +317,16 @@ impl fmt::Display for SpecError {
                 f,
                 "spec: the value at {path} must be {expected}; found {found} ({value})"
             ),
-            SpecError::UnknownKey { path, key } if path.is_empty() => {
-                write!(f, "spec: unknown key {key:?} at the top level")
-            }
-            SpecError::UnknownKey { path, key } => {
-                write!(f, "spec: unknown key {key:?} at {path}")
-            }
+            SpecError::UnknownKey { path, key, allowed } if path.is_empty() => write!(
+                f,
+                "spec: unknown key {key:?} at the top level; the allowed keys are: {}",
+                allowed.join(", ")
+            ),
+            SpecError::UnknownKey { path, key, allowed } => write!(
+                f,
+                "spec: unknown key {key:?} at {path}; the allowed keys are: {}",
+                allowed.join(", ")
+            ),
             SpecError::MissingKey { path, key } if path.is_empty() => {
                 write!(f, "spec: missing required key {key:?} at the top level")
             }
@@ -308,16 +337,7 @@ impl fmt::Display for SpecError {
             SpecError::UnknownParent { loop_name, parent } => {
                 write!(f, "loop {loop_name:?} names unknown parent {parent:?}")
             }
-            SpecError::Cycle { members } => {
-                write!(f, "loops form a parent cycle: ")?;
-                for member in members {
-                    write!(f, "{member} -> ")?;
-                }
-                match members.first() {
-                    Some(first) => write!(f, "{first}"),
-                    None => Ok(()),
-                }
-            }
+            SpecError::Cycle { members } => write_cycle(f, members),
             SpecError::NoLoops { spec_name } => {
                 write!(f, "spec {spec_name:?} declares no loops")
             }
@@ -446,82 +466,30 @@ impl fmt::Display for SpecError {
                 parent,
                 segment,
                 conditions,
-            } => {
-                write!(f, "loops {first:?} and {second:?} under ")?;
-                match parent {
-                    Some(parent) => write!(f, "{parent:?}")?,
-                    None => write!(f, "the root")?,
-                }
-                write!(f, " share the identical trigger {segment:?}")?;
-                if !conditions.is_empty() {
-                    write!(f, " where {{")?;
-                    for (i, (position, value)) in conditions.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{position}: {value:?}")?;
-                    }
-                    write!(f, "}}")?;
-                }
-                Ok(())
-            }
+            } => write_ambiguous(f, [first, second], parent.as_deref(), segment, conditions),
             SpecError::OverlappingTriggers {
                 parent,
                 a,
                 b,
                 conditions_a,
                 conditions_b,
-            } => {
-                write!(f, "loops {a:?} and {b:?} under ")?;
-                match parent {
-                    Some(parent) => write!(f, "{parent:?}")?,
-                    None => write!(f, "the root")?,
-                }
-                write!(
-                    f,
-                    " can open on the same segment: {a:?} on {conditions_a}, {b:?} on \
-                     {conditions_b}, no position they both test requires different values, \
-                     and neither trigger is more specific than the other"
-                )
+            } => write!(
+                f,
+                "loops {a:?} and {b:?} under {} can open on the same segment: {a:?} on \
+                 {conditions_a}, {b:?} on {conditions_b}, no position they both test requires \
+                 different values, and neither trigger is more specific than the other",
+                Under(parent.as_deref())
+            ),
+            SpecError::SummarySchema { summary, source } => {
+                write!(f, "summary {summary:?} does not match the schema: {source}")
             }
-        }
-    }
-}
-
-impl std::error::Error for SpecError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // Every variant that holds an inner error prints it in full, so the
-        // chain stops here instead of printing it a second time.
-        match self {
-            SpecError::Json(_)
-            | SpecError::Schema { .. }
-            | SpecError::Patch { .. }
-            | SpecError::UnknownParent { .. }
-            | SpecError::Cycle { .. }
-            | SpecError::NoLoops { .. }
-            | SpecError::EmptySegmentId { .. }
-            | SpecError::EndIsTrigger { .. }
-            | SpecError::BadPosition { .. }
-            | SpecError::NotAnObject { .. }
-            | SpecError::WrongType { .. }
-            | SpecError::UnknownKey { .. }
-            | SpecError::MissingKey { .. }
-            | SpecError::SegmentSchema { .. }
-            | SpecError::BadElementDef { .. }
-            | SpecError::TableSchema { .. }
-            | SpecError::BadTable { .. }
-            | SpecError::BadVersion { .. }
-            | SpecError::BadControl { .. }
-            | SpecError::BadOccurrence { .. }
-            | SpecError::BalanceSchema { .. }
-            | SpecError::BadBalance { .. }
-            | SpecError::UnmatchedTrigger { .. }
-            | SpecError::TriggerQualifierWider { .. }
-            | SpecError::TriggerNotFirst { .. }
-            | SpecError::UnknownLoopUsage { .. }
-            | SpecError::ZeroLoopMax { .. }
-            | SpecError::AmbiguousTrigger { .. }
-            | SpecError::OverlappingTriggers { .. } => None,
+            SpecError::BadSummary { summary, reason } => write!(f, "summary {summary:?}: {reason}"),
+            SpecError::UnknownDefaultTable { table, known } => write!(
+                f,
+                "default_table names the table {table:?}, which the spec does not define; \
+                 its tables are: {}",
+                known.join(", ")
+            ),
         }
     }
 }

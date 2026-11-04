@@ -3,8 +3,8 @@
 //! spec alone.
 
 use super::plan::column_type;
-use crate::column::ColumnType;
 use crate::spec::{ROW_COLUMN, SEGMENT_COLUMN, Spec, TableDef};
+use crate::value::ColumnType;
 
 /// One column of a projected table.
 #[derive(Debug, Clone, PartialEq, Eq)]

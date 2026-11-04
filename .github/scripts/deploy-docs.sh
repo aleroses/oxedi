@@ -9,16 +9,37 @@
 #              otherwise it deploys only its own folder and leaves `latest`, the viewer and
 #              llms.txt alone.
 #
-# By default every read of gh-pages is of the commit a fresh `git fetch origin gh-pages`
-# returned, and every push goes through retry-gh-pages.sh; gh-pages must already exist on
-# origin, or the first fetch fails the run. With --no-push nothing is fetched or pushed: mike
-# runs without --push, publish-viewer.sh commits onto the local gh-pages branch (PUSH=local),
-# and the reads and the final checks are of that local branch, which may not exist yet.
+# mike and publish-viewer.sh (PUSH=local) only commit onto the local gh-pages branch; this
+# script pushes it. By default every read of gh-pages is of the commit a fresh
+# `git fetch origin gh-pages` returned, and every write runs through retry-gh-pages.sh, which
+# resets the local gh-pages to that commit, then the write and its push run; gh-pages must
+# already exist on origin, or the first fetch fails the run. With --no-push nothing is fetched
+# or pushed, and the reads and the final checks are of the local branch, which may not exist yet.
 #
-# Runs from the repository root. Needs mike (and mkdocs) on the PATH, jq, a git identity, the
-# viewer's module in viewer/pkg (make wasm) and GITHUB_SHA, which names the viewer's commit.
-# Usage: deploy-docs.sh [--no-push] dev
-#        deploy-docs.sh [--no-push] release X.Y
+# The push token: a push run reads it from file descriptor 3 (the workflow's GITHUB_TOKEN, which
+# the docs.yml deploy step writes there and keeps out of this process's environment), keeps it in
+# an unexported shell variable and closes the descriptor before anything else runs, so mike,
+# mkdocs and every other command run without it, and no environment of theirs or of the
+# processes above them holds it. Only `git push` gets it, as an Authorization header in that one
+# command's environment (GIT_CONFIG_COUNT and friends): never in argv, .git/config or a file.
+# A push run refuses when PAGES_PUSH_TOKEN is still in its environment, since the token would
+# then reach mike, and when nothing arrives on the descriptor within 5 seconds. Tracing is
+# switched off first, so `bash -x` cannot print it. --no-push never reads the descriptor.
+#
+# Runs from the repository root. Needs mike (and mkdocs) on the PATH, jq, base64, a git
+# identity, the viewer's module in viewer/pkg (make wasm) and GITHUB_SHA, which names the
+# viewer's commit.
+# Usage: deploy-docs.sh dev | release X.Y 3<<<"$TOKEN"
+#        deploy-docs.sh --no-push dev | release X.Y
+{
+  set +x
+  token=""
+  token_status=0
+  if [ "${1:-}" != "--no-push" ]; then
+    read -r -t 5 token <&3 || token_status=$?
+  fi
+  exec 3<&-
+} 2> /dev/null
 set -euo pipefail
 
 usage() {
@@ -52,13 +73,25 @@ case "$kind" in
 esac
 
 if [ "$push" = true ]; then
+  if [ -n "${PAGES_PUSH_TOKEN+set}" ]; then
+    echo "deploy-docs: PAGES_PUSH_TOKEN is set in the environment, where mike would inherit it; the docs.yml deploy step starts this script as \`env -u PAGES_PUSH_TOKEN\` and writes the token to file descriptor 3" >&2
+    exit 1
+  fi
+  if [ "$token_status" -gt 128 ]; then
+    echo "deploy-docs: nothing arrived on file descriptor 3 within 5 seconds (the docs.yml deploy step writes the workflow's GITHUB_TOKEN there and closes it); --no-push builds without it" >&2
+    exit 1
+  fi
+  if [ -z "$token" ]; then
+    echo "deploy-docs: a push run reads its token from file descriptor 3, which is empty or closed (the docs.yml deploy step writes the workflow's GITHUB_TOKEN there); --no-push builds without it" >&2
+    exit 1
+  fi
   pages=""
-  mike_push=(--push)
+  # shellcheck source-path=SCRIPTDIR source=retry-gh-pages.sh
+  . "$scripts/retry-gh-pages.sh"
 else
   pages=gh-pages
-  mike_push=()
 fi
-# KIND and VERSION are read by publish-viewer.sh and by the inner shells below.
+# KIND and VERSION are read by publish-viewer.sh.
 export NO_MKDOCS_2_WARNING=true KIND=$kind VERSION=$version
 
 # Brings gh-pages up to date; a no-push run reads the local branch and fetches nothing. A push
@@ -74,10 +107,30 @@ refresh() {
       }
   fi
 }
-# Runs a command that writes gh-pages: through retry-gh-pages.sh when it pushes, as is otherwise.
-write_pages() {
-  if [ "$push" = true ]; then "$scripts/retry-gh-pages.sh" "$@"; else "$@"; fi
+# Pushes the local gh-pages to origin. The header holds the token, so it is set in this one
+# command's environment; git's own messages name the remote, never the header. Client hooks are
+# off for the push, so a hook an earlier build step planted in the checkout cannot read it.
+push_pages() {
+  local auth
+  auth=$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n') && [ -n "$auth" ] || {
+    echo "deploy-docs: could not encode the push token for the Authorization header (base64 failed); nothing was pushed" >&2
+    return 1
+  }
+  GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+    GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+    git -c core.hooksPath=/dev/null push --no-verify origin gh-pages:gh-pages
 }
+# One attempt of a push run: the command commits onto the local gh-pages, then it is pushed.
+# Chained with &&, because retry_gh_pages runs it where `set -e` does not apply.
+commit_then_push() { "$@" && push_pages; }
+# Runs a command that commits onto the local gh-pages: as is with --no-push, otherwise through
+# retry_gh_pages, which pushes the commit and redoes both when the push is rejected.
+write_pages() {
+  if [ "$push" = true ]; then retry_gh_pages commit_then_push "$@"; else "$@"; fi
+}
+# The release deploys, as functions so that write_pages can retry them as one command.
+deploy_latest() { mike deploy --update-aliases "$version" latest && mike set-default latest; }
 on_pages() { git cat-file -e "$pages:$1" 2>/dev/null; }
 
 # The viewers and llms.txt already published, which must still be there at the end.
@@ -91,31 +144,22 @@ if on_pages llms.txt; then llms_before=true; fi
 
 moves=false
 if [ "$kind" = "dev" ]; then
-  write_pages mike deploy "${mike_push[@]}" --title "dev (unreleased)" dev
+  write_pages mike deploy --title "dev (unreleased)" dev
 else
   refresh
   moves=$({ git show "$pages:versions.json" 2>/dev/null || echo '[]'; } | "$scripts/is-latest-minor.sh" "$version")
   echo "Version $version: latest moves = $moves"
-  # The inner shells expand VERSION from the environment and "$@" from their own arguments
-  # (--push, or nothing).
-  # shellcheck disable=SC2016
   if [ "$moves" = "true" ]; then
-    write_pages bash -ec '
-      mike deploy "$@" --update-aliases "$VERSION" latest
-      mike set-default "$@" latest' deploy "${mike_push[@]}"
+    write_pages deploy_latest
   else
-    write_pages bash -ec 'mike deploy "$@" "$VERSION"' deploy "${mike_push[@]}"
+    write_pages mike deploy "$version"
   fi
 fi
 
 # `viewer/` for a release that moves latest (keeping `viewer/dev/`), `viewer/dev/` for dev. A
 # release also writes llms.txt at the root. Nothing else on gh-pages is touched.
 if [ "$kind" = "dev" ] || [ "$moves" = "true" ]; then
-  if [ "$push" = true ]; then
-    write_pages "$scripts/publish-viewer.sh"
-  else
-    PUSH=local "$scripts/publish-viewer.sh"
-  fi
+  write_pages env PUSH=local "$scripts/publish-viewer.sh"
 fi
 
 # What the run was meant to publish.

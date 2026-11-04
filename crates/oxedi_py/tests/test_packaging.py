@@ -11,7 +11,7 @@ def test_the_base_package_requires_nothing():
 
 def test_the_extras_are_the_documented_ones():
     assert sorted(metadata.metadata("oxedi").get_all("Provides-Extra")) == [
-        "edi-835-parser", "pandas", "polars", "pyx12", "test",
+        "edi-835-parser", "pandas", "polars", "pyx12",
     ]
 
 

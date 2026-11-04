@@ -177,7 +177,8 @@ fn reading_loop(
 /// The occurrence a loop's trigger opens on, if the loop declares one.
 fn trigger_occurrence(spec: &Spec, id: LoopId) -> Option<&OccurrenceDef> {
     let def = spec.get(id);
-    def.occurrences.iter().find(|o| o.opens_on(&def.trigger))
+    def.trigger_occurrence()
+        .and_then(|index| def.occurrences.get(index))
 }
 
 /// Rejects a source in loop `id` above an anchor whose segments all come

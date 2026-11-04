@@ -8,8 +8,7 @@
 use std::sync::Arc;
 
 use oxedi_core::write::{Envelope, Finding, ValueOrigin, WriteError, write_with_findings};
-use oxedi_core::{Spec, Tables};
-use pyo3::exceptions::PyValueError;
+use oxedi_core::{Builtin, Spec, Tables};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyMapping, PyTuple};
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyfunction, gen_stub_pymethods};
@@ -18,10 +17,8 @@ use crate::diagnostic::PyDiagnostic;
 use crate::document::PyDelimiters;
 use crate::import;
 use crate::spec::{self, PySpec};
+use crate::stamp;
 use crate::tables::PyTables;
-
-/// Days from 0001-01-01 (ordinal 1) to 1970-01-01.
-const EPOCH_ORDINAL: i64 = 719_163;
 
 /// Who sends and receives an interchange, when, its first control number
 /// and its delimiters. The writer derives the rest of the envelope: counts,
@@ -48,10 +45,10 @@ impl PyEnvelope {
         receiver_id,
         date,
         time,
-        sender_qualifier = "ZZ",
-        receiver_qualifier = "ZZ",
-        usage_indicator = "P",
-        control_number = 1,
+        sender_qualifier = Envelope::DEFAULT_QUALIFIER,
+        receiver_qualifier = Envelope::DEFAULT_QUALIFIER,
+        usage_indicator = Envelope::DEFAULT_USAGE_INDICATOR,
+        control_number = Envelope::DEFAULT_CONTROL_NUMBER,
         application_sender = None,
         application_receiver = None,
         delimiters = None,
@@ -65,13 +62,9 @@ impl PyEnvelope {
         date: &Bound<'_, PyAny>,
         #[gen_stub(override_type(type_repr = "datetime.time", imports = ("datetime",)))]
         time: &Bound<'_, PyAny>,
-        #[gen_stub(override_type(type_repr = "builtins.str", imports = ("builtins",)))]
         sender_qualifier: &str,
-        #[gen_stub(override_type(type_repr = "builtins.str", imports = ("builtins",)))]
         receiver_qualifier: &str,
-        #[gen_stub(override_type(type_repr = "builtins.str", imports = ("builtins",)))]
         usage_indicator: &str,
-        #[gen_stub(override_type(type_repr = "builtins.int", imports = ("builtins",)))]
         control_number: u64,
         application_sender: Option<String>,
         application_receiver: Option<String>,
@@ -79,44 +72,49 @@ impl PyEnvelope {
         #[gen_stub(override_type(type_repr = "builtins.bool", imports = ("builtins",)))]
         line_break: bool,
     ) -> PyResult<Self> {
-        let datetime = date.py().import("datetime")?;
-        if date.is_instance(&datetime.getattr("datetime")?)? {
-            return Err(PyValueError::new_err(format!(
-                "date {date} is a datetime; give a datetime.date (the envelope's time is its own field)"
-            )));
-        }
-        if !time.getattr("tzinfo")?.is_none() {
-            return Err(PyValueError::new_err(format!(
-                "time {time} has a time zone; give a datetime.time without one, as the envelope writes local time"
-            )));
-        }
-        let ordinal: i64 = date.call_method0("toordinal")?.extract()?;
-        let days = i32::try_from(ordinal - EPOCH_ORDINAL)
-            .map_err(|_| PyValueError::new_err(format!("date {date} is out of range")))?;
-        let part = |name: &str| -> PyResult<i32> { time.getattr(name)?.extract() };
-        if part("microsecond")? != 0 {
-            return Err(PyValueError::new_err(format!(
-                "time {time} has a fraction of a second; the envelope holds whole seconds"
-            )));
-        }
-        let seconds = part("hour")? * 3600 + part("minute")? * 60 + part("second")?;
-        let mut inner = Envelope::new(
+        let base = Envelope::new(
             sender_qualifier,
             sender_id,
             receiver_qualifier,
             receiver_id,
-            days,
-            seconds,
+            stamp::date_days(date)?,
+            stamp::time_seconds(time)?,
         );
-        inner.usage_indicator = usage_indicator.to_string();
-        inner.control_number = control_number;
-        inner.application_sender = application_sender;
-        inner.application_receiver = application_receiver;
-        inner.line_break = line_break;
-        if let Some(delimiters) = delimiters {
-            inner.delimiters = delimiters.get().inner;
-        }
+        let delimiters = delimiters.map_or(base.delimiters, |given| given.get().inner);
+        let inner = Envelope {
+            usage_indicator: usage_indicator.to_string(),
+            control_number,
+            application_sender,
+            application_receiver,
+            delimiters,
+            line_break,
+            ..base
+        };
         Ok(Self { inner })
+    }
+
+    /// The qualifier of a sender or receiver id when none is given, the
+    /// default of `sender_qualifier` and `receiver_qualifier`.
+    #[classattr]
+    #[pyo3(name = "DEFAULT_QUALIFIER")]
+    fn default_qualifier() -> &'static str {
+        Envelope::DEFAULT_QUALIFIER
+    }
+
+    /// The usage indicator when none is given, the default of
+    /// `usage_indicator`: production data.
+    #[classattr]
+    #[pyo3(name = "DEFAULT_USAGE_INDICATOR")]
+    fn default_usage_indicator() -> &'static str {
+        Envelope::DEFAULT_USAGE_INDICATOR
+    }
+
+    /// The first control number when none is given, the default of
+    /// `control_number`.
+    #[classattr]
+    #[pyo3(name = "DEFAULT_CONTROL_NUMBER")]
+    fn default_control_number() -> u64 {
+        Envelope::DEFAULT_CONTROL_NUMBER
     }
 
     /// The sender id.
@@ -159,9 +157,12 @@ impl PyEnvelope {
     #[getter]
     #[gen_stub(override_return_type(type_repr = "datetime.date", imports = ("datetime",)))]
     fn date<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        py.import("datetime")?
-            .getattr("date")?
-            .call_method1("fromordinal", (i64::from(self.inner.date) + EPOCH_ORDINAL,))
+        let datetime = py.import("datetime")?;
+        let epoch = datetime.getattr("date")?.call1((1970, 1, 1))?;
+        let offset = datetime
+            .getattr("timedelta")?
+            .call1((i64::from(self.inner.date),))?;
+        epoch.add(offset)
     }
 
     /// The time.
@@ -358,37 +359,49 @@ pub fn write_tables<'py>(
     #[gen_stub(override_type(type_repr = "builtins.bool", imports = ("builtins",)))]
     allow_findings: bool,
 ) -> PyResult<Bound<'py, PyTuple>> {
-    let given = spec::given(spec);
-    let (shared, spec): (Arc<Tables>, Arc<Spec>) = if let Ok(parsed) = tables.cast::<PyTables>() {
-        let parsed = parsed.get();
-        let spec = given.unwrap_or_else(|| Arc::clone(parsed.spec()));
-        (Arc::clone(parsed.tables()), spec)
-    } else {
-        let mapping = tables.cast::<PyMapping>().map_err(|_| {
-                refuse(
-                    py,
-                    "write: tables must be the tables of a parse or a mapping of table names to Arrow, Polars or pandas tables".to_string(),
-                    Vec::new(),
-                )
-            })?;
-        let spec = given.unwrap_or_else(spec::builtin);
-        match import::tables(&spec, mapping)? {
-            Ok(tables) => (Arc::new(tables), spec),
-            Err(message) => return Err(refuse(py, message, Vec::new())),
-        }
-    };
+    let (shared, spec) = resolve(py, tables, spec::given(spec))?;
     let envelope = envelope.get().inner.clone();
     let written = py.detach(|| write_with_findings(&spec, &shared, &envelope));
-    let (bytes, findings) = match written {
-        Ok(written) => written,
-        Err(error) => {
-            let findings = match &error {
-                WriteError::Findings(findings) => findings.clone(),
-                _ => Vec::new(),
-            };
-            return Err(refuse(py, error.to_string(), findings));
-        }
-    };
+    finish(py, written, allow_findings)
+}
+
+/// The tables to write and the spec to write them with: those of a parse
+/// (the given spec replacing its own), or a mapping read against the given
+/// spec, else the fallback built-in.
+fn resolve(
+    py: Python<'_>,
+    tables: &Bound<'_, PyAny>,
+    given: Option<Arc<Spec>>,
+) -> PyResult<(Arc<Tables>, Arc<Spec>)> {
+    if let Ok(parsed) = tables.cast::<PyTables>() {
+        let parsed = parsed.get();
+        let spec = given.unwrap_or_else(|| Arc::clone(parsed.spec()));
+        return Ok((Arc::clone(parsed.tables()), spec));
+    }
+    let mapping = tables.cast::<PyMapping>().map_err(|_| {
+        let message = "write: tables must be the tables of a parse or a mapping of table names to Arrow, Polars or pandas tables";
+        refuse(py, message.to_string(), Vec::new())
+    })?;
+    let spec = given.unwrap_or_else(|| Arc::clone(&Builtin::fallback().spec));
+    let imported = import::tables(&spec, mapping)?;
+    let tables = imported.map_err(|message| refuse(py, message, Vec::new()))?;
+    Ok((Arc::new(tables), spec))
+}
+
+/// The written bytes with their findings as a tuple; a failed write, or
+/// findings when they are not allowed, are refused with the findings.
+fn finish<'py>(
+    py: Python<'py>,
+    written: Result<(Vec<u8>, Vec<Finding>), WriteError>,
+    allow_findings: bool,
+) -> PyResult<Bound<'py, PyTuple>> {
+    let (bytes, findings) = written.map_err(|error| {
+        let findings = match &error {
+            WriteError::Findings(findings) => findings.clone(),
+            _ => Vec::new(),
+        };
+        refuse(py, error.to_string(), findings)
+    })?;
     if !allow_findings && !findings.is_empty() {
         let message = WriteError::Findings(findings.clone()).to_string();
         return Err(refuse(py, message, findings));

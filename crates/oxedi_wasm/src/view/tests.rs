@@ -160,7 +160,7 @@ fn tables_and_diagnostics_match_the_core() {
         };
         let view = view(&bytes).expect("view");
         let document = Document::parse(&bytes[..]).expect("parse");
-        let (tables, diagnostics) = Processor::run(select(&document), &document);
+        let (tables, diagnostics) = Processor::run(select(&document), &document, None);
         assert_eq!(view.tables.len(), tables.len(), "{path:?}");
         for (mine, theirs) in view.tables.iter().zip(tables.iter()) {
             assert_eq!(mine.name, theirs.name());

@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use libduckdb_sys as ffi;
 
-use crate::builtins::{Builtin, Builtins};
+use crate::builtins::{BuiltinSchema, BuiltinTable, Builtins};
 use crate::diagnostics;
 use crate::function::{TableFunction, c_message, drop_box, guarded};
 use crate::options::{Named, macro_parameter, named};
@@ -67,39 +67,69 @@ fn position(index: usize) -> Result<i32, SchemaError> {
         })
 }
 
-/// Every column of every table `read_835` returns for `builtin`.
-pub fn rows(builtin: &Builtin, binary: bool) -> Result<Vec<Row>, SchemaError> {
-    let mut rows = Vec::new();
-    for table in &builtin.tables {
-        let parents = table.parents.iter().map(Option::as_ref);
-        for (index, ((column, kind), parent)) in table.columns.iter().zip(parents).enumerate() {
+impl Row {
+    /// The row of a column at 0-based `index` in its table.
+    fn at(
+        index: usize,
+        table: &str,
+        column: &str,
+        sql: SqlType,
+        parent: Option<&str>,
+    ) -> Result<Row, SchemaError> {
+        Ok(Row {
+            table: table.to_owned(),
+            column: column.to_owned(),
+            sql,
+            parent: parent.map(str::to_owned),
+            position: position(index)?,
+        })
+    }
+}
+
+/// The rows of one spec table, in column order.
+fn table_rows(
+    table: &BuiltinTable,
+    binary: bool,
+) -> impl Iterator<Item = Result<Row, SchemaError>> + '_ {
+    let parents = table.parents.iter().map(Option::as_deref);
+    table
+        .columns
+        .iter()
+        .zip(parents)
+        .enumerate()
+        .map(move |(index, ((column, kind), parent))| {
             let sql =
                 SqlType::try_of(*kind, binary).ok_or_else(|| SchemaError::UnsupportedType {
                     table: table.name.clone(),
                     column: column.clone(),
                     kind: *kind,
                 })?;
-            rows.push(Row {
-                table: table.name.clone(),
-                column: column.clone(),
-                sql,
-                parent: parent.cloned(),
-                position: position(index)?,
-            });
-        }
-    }
+            Row::at(index, &table.name, column, sql, parent)
+        })
+}
+
+/// The rows of the `diagnostics` table, in column order.
+fn diagnostic_rows(binary: bool) -> Result<Vec<Row>, SchemaError> {
     let types = diagnostics::types(binary).map_err(|error| SchemaError::Internal {
         message: error.to_string(),
     })?;
-    for (index, ((column, _), sql)) in diagnostics::columns().into_iter().zip(types).enumerate() {
-        rows.push(Row {
-            table: diagnostics::TABLE.to_owned(),
-            column,
-            sql,
-            parent: None,
-            position: position(index)?,
-        });
-    }
+    diagnostics::columns()
+        .into_iter()
+        .zip(types)
+        .enumerate()
+        .map(|(index, ((column, _), sql))| Row::at(index, diagnostics::TABLE, &column, sql, None))
+        .collect()
+}
+
+/// Every column of every table `read_835` returns for `builtin`: the spec's
+/// tables, then `diagnostics`.
+pub fn rows(builtin: &BuiltinSchema, binary: bool) -> Result<Vec<Row>, SchemaError> {
+    let mut rows = builtin
+        .tables
+        .iter()
+        .flat_map(|table| table_rows(table, binary))
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.extend(diagnostic_rows(binary)?);
     Ok(rows)
 }
 
@@ -107,16 +137,8 @@ pub fn rows(builtin: &Builtin, binary: bool) -> Result<Vec<Row>, SchemaError> {
 pub fn builtin<'b>(
     builtins: &'b Builtins,
     version: Option<&str>,
-) -> Result<&'b Builtin, SchemaError> {
-    match version {
-        None => Ok(builtins.default()),
-        Some(version) => builtins
-            .by_version(version)
-            .ok_or_else(|| SchemaError::UnknownVersion {
-                version: version.to_owned(),
-                known: builtins.versions(),
-            }),
-    }
+) -> Result<&'b BuiltinSchema, SchemaError> {
+    Ok(builtins.pick(version)?)
 }
 
 /// Registers `oxedi_schema` on `connection`, with `builtins` as the

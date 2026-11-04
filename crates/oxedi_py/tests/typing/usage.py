@@ -28,6 +28,7 @@ from oxedi import (
     Stream,
     Table,
     Tables,
+    Version,
     WriteError,
     WriteFinding,
 )
@@ -35,7 +36,7 @@ from oxedi.pyx12 import validate
 
 
 def results(data: bytes, path: str) -> list[Result]:
-    spec: Spec = Spec.builtin(version="4010").patch({"name": "x"}).patch('{"name": "y"}')
+    spec: Spec = Spec.builtin(version=Version.V4010).patch({"name": "x"}).patch('{"name": "y"}')
     loops: list[str] = Spec.from_json(spec.to_json()).loops()
     assert loops
     schema_names: list[str] = list(spec.schema())

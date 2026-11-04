@@ -1,13 +1,14 @@
 //! `Spec`: the loop structure, element definitions and tables, as data.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use oxedi_core::{Segment, Spec};
+use oxedi_core::{Builtin, Segment, Spec, Version};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyDict, PyString};
 
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};
+use pyo3_stub_gen::{PyStubType, TypeInfo};
 
 use crate::arrow;
 use crate::tables::extra;
@@ -34,23 +35,6 @@ impl SchemaExport {
     }
 }
 
-static BUILTIN: OnceLock<Arc<Spec>> = OnceLock::new();
-static BUILTIN_4010: OnceLock<Arc<Spec>> = OnceLock::new();
-
-/// The built-in spec, loaded once per process.
-pub fn builtin() -> Arc<Spec> {
-    BUILTIN
-        .get_or_init(|| Arc::new(Spec::builtin_835()))
-        .clone()
-}
-
-/// The built-in 4010 spec, loaded once per process.
-fn builtin_4010() -> Arc<Spec> {
-    BUILTIN_4010
-        .get_or_init(|| Arc::new(Spec::builtin_835_4010()))
-        .clone()
-}
-
 /// The spec given to a call, which it uses as is.
 pub fn given(spec: Option<&Bound<'_, PySpec>>) -> Option<Arc<Spec>> {
     spec.map(|spec| spec.get().inner.clone())
@@ -66,12 +50,137 @@ pub fn given_or_selected<'s>(
     if let Some(spec) = given {
         return spec;
     }
-    let (default, other) = (builtin(), builtin_4010());
-    let chosen = Spec::select(&[&default, &other], &default, segments);
-    if std::ptr::eq(chosen, &*other) {
-        other
-    } else {
-        default
+    Arc::clone(&Builtin::select(segments).spec)
+}
+
+/// An X12 release a built-in spec covers.
+#[gen_stub_pyclass(module = "oxedi._core")]
+#[pyclass(name = "Version", module = "oxedi", eq, frozen, hash, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PyVersion(Version);
+
+impl From<Version> for PyVersion {
+    fn from(version: Version) -> PyVersion {
+        PyVersion(version)
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyVersion {
+    /// Release 5010.
+    #[classattr]
+    #[pyo3(name = "V5010")]
+    fn v5010() -> PyVersion {
+        Version::V5010.into()
+    }
+
+    /// Release 4010.
+    #[classattr]
+    #[pyo3(name = "V4010")]
+    fn v4010() -> PyVersion {
+        Version::V4010.into()
+    }
+
+    /// The release number as text.
+    #[getter]
+    fn text(&self) -> &'static str {
+        self.0.text()
+    }
+
+    fn __str__(&self) -> &'static str {
+        self.text()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Version.V{}", self.0.text())
+    }
+
+    /// Every version a built-in spec covers, the default first.
+    #[staticmethod]
+    fn all() -> Vec<PyVersion> {
+        Version::ALL.into_iter().map(PyVersion::from).collect()
+    }
+}
+
+/// A version argument: a `Version`, its text, or anything else (kept as its
+/// repr and type name, so the call that received it can refuse it).
+pub enum VersionArg {
+    Version(Version),
+    Text(String),
+    Other { shown: String, kind: String },
+}
+
+impl VersionArg {
+    /// The version `Spec.builtin` uses when none is given.
+    const DEFAULT: VersionArg = VersionArg::Version(Builtin::DEFAULT_VERSION);
+
+    /// The built-in of `transaction` the argument names, for the `call` that
+    /// received it (e.g. `Spec.builtin`): `TypeError` for an argument that is
+    /// neither a `Version` nor text, `ValueError` for a version no built-in
+    /// covers.
+    fn resolve(&self, call: &str, transaction: &str) -> PyResult<&'static Builtin> {
+        let found = match self {
+            VersionArg::Version(version) => Builtin::find(transaction, *version),
+            VersionArg::Text(text) => Builtin::find_text(transaction, text),
+            VersionArg::Other { shown, kind } => {
+                return Err(PyTypeError::new_err(format!(
+                    "{call}(version={shown}): version must be an oxedi.Version or its text, not {kind}"
+                )));
+            }
+        };
+        found.map_err(|error| {
+            PyValueError::new_err(format!("{call}(version={:?}): {error}", error.version))
+        })
+    }
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for VersionArg {
+    type Error = PyErr;
+
+    fn extract(object: Borrowed<'a, 'py, PyAny>) -> PyResult<VersionArg> {
+        if let Ok(version) = object.extract::<PyVersion>() {
+            return Ok(VersionArg::Version(version.0));
+        }
+        if let Ok(text) = object.extract::<String>() {
+            return Ok(VersionArg::Text(text));
+        }
+        let shown = object.repr().map_or_else(
+            |_| "an object whose repr failed".to_owned(),
+            |text| text.to_string(),
+        );
+        let kind = object
+            .get_type()
+            .qualname()
+            .map_or_else(|_| "an unknown type".to_owned(), |name| name.to_string());
+        Ok(VersionArg::Other { shown, kind })
+    }
+}
+
+impl<'py> IntoPyObject<'py> for VersionArg {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            VersionArg::Version(version) => {
+                Ok(PyVersion::from(version).into_pyobject(py)?.into_any())
+            }
+            VersionArg::Text(text) => Ok(PyString::new(py, &text).into_any()),
+            // This conversion only renders the default, a `Version`; this arm is never reached.
+            VersionArg::Other { shown, .. } => Ok(PyString::new(py, &shown).into_any()),
+        }
+    }
+}
+
+impl PyStubType for VersionArg {
+    fn type_output() -> TypeInfo {
+        PyVersion::type_output()
+    }
+
+    fn type_input() -> TypeInfo {
+        PyVersion::type_input()
     }
 }
 
@@ -85,25 +194,22 @@ pub struct PySpec {
 #[gen_stub_pymethods]
 #[pymethods]
 impl PySpec {
-    /// The built-in 835 spec of `version`, `"5010"` (the default) or
-    /// `"4010"`; raises `ValueError` for any other version.
+    /// The version of the default built-in spec.
+    #[classattr]
+    #[pyo3(name = "DEFAULT_VERSION")]
+    fn default_version() -> PyVersion {
+        Builtin::DEFAULT_VERSION.into()
+    }
+
+    /// The built-in spec of `version`; it defaults to `Spec.DEFAULT_VERSION`.
+    /// Raises `ValueError` for a version no built-in covers.
     #[staticmethod]
-    #[pyo3(signature = (version = "5010"))]
-    fn builtin(
-        // Described as written so the stub carries the default value.
-        #[gen_stub(override_type(type_repr = "builtins.str", imports = ("builtins",)))]
-        version: &str,
-    ) -> PyResult<PySpec> {
-        let inner = match version {
-            "5010" => builtin(),
-            "4010" => builtin_4010(),
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "Spec.builtin(version={other:?}): no built-in spec for that version; the built-ins are \"5010\" and \"4010\""
-                )));
-            }
-        };
-        Ok(PySpec { inner })
+    #[pyo3(signature = (version = VersionArg::DEFAULT))]
+    fn builtin(version: VersionArg) -> PyResult<PySpec> {
+        let found = version.resolve("Spec.builtin", Builtin::fallback().transaction)?;
+        Ok(PySpec {
+            inner: Arc::clone(&found.spec),
+        })
     }
 
     /// The spec described by `json`; raises `SpecError` with the core message

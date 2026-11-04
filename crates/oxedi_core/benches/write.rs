@@ -14,7 +14,7 @@ fn write_united(c: &mut Criterion) {
     let spec = Spec::builtin_835();
     let bytes = load_from("tests/samples", "edi835_test_united.rmt");
     let document = Document::parse(&bytes[..]).expect("sample has an ISA");
-    let (tables, _) = Processor::run(&spec, &document);
+    let (tables, _) = Processor::run(&spec, &document, None);
     let envelope = Envelope::new("ZZ", "SENDER", "ZZ", "RECEIVER", 19_723, 45_000);
     let written = write(&spec, &tables, &envelope).expect("the sample writes back");
     let mut group = c.benchmark_group("write");
@@ -25,5 +25,9 @@ fn write_united(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, write_united);
+criterion_group! {
+    name = benches;
+    config = common::profiled();
+    targets = write_united
+}
 criterion_main!(benches);

@@ -49,5 +49,9 @@ fn index_fixtures(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, tokenize_fixtures, index_fixtures);
+criterion_group! {
+    name = benches;
+    config = common::profiled();
+    targets = tokenize_fixtures, index_fixtures
+}
 criterion_main!(benches);

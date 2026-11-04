@@ -15,9 +15,10 @@
 use crate::delimiters::Delimiters;
 use crate::diagnostic::{Diagnostic, LoopRef, Rule};
 use crate::engine::Event;
-use crate::frame::BYTE_ORDER_MARK;
 use crate::segment::Segment;
 use crate::spec::{ControlCount, LoopId, Spec, render_trigger};
+use crate::trivia::BYTE_ORDER_MARK;
+use crate::value::parse_unsigned;
 
 /// One loop instance the checker is inside of.
 #[derive(Debug, Clone)]
@@ -389,18 +390,9 @@ fn text_at<'a>(
 }
 
 /// A count written as ASCII digits (leading zeros allowed); `None` for
-/// anything else, including the empty value and overflow.
+/// anything else, including the empty value and a count past `usize`.
 fn parse_count(value: &[u8]) -> Option<usize> {
-    if value.is_empty() {
-        return None;
-    }
-    value.iter().try_fold(0usize, |count, &byte| {
-        if byte.is_ascii_digit() {
-            count.checked_mul(10)?.checked_add(usize::from(byte - b'0'))
-        } else {
-            None
-        }
-    })
+    parse_unsigned(value).and_then(|count| usize::try_from(count).ok())
 }
 
 mod balance;

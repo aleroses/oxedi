@@ -70,7 +70,7 @@ Ask the spec. No file is needed, and a patched spec describes its own columns.
     {b'oxedi.parent': b'payments'}
     ```
 
-    Pass the spec you write with, such as `Spec.builtin("4010")` or a patched one.
+    Pass the spec you write with, such as `oxedi.Spec.builtin(oxedi.Version.V4010)` or a patched one.
 
 === "SQL"
 

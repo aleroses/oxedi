@@ -21,10 +21,10 @@
 //! claim-level interest (`AMT*I`) and prompt-pay discounts are not part of
 //! it, as the guide's text for them has not been verified.
 
-use crate::column::parse_r;
 use crate::diagnostic::Rule;
 use crate::segment::Segment;
 use crate::spec::{LoopId, Spec, render_terms};
+use crate::value::parse_r;
 
 use super::StructureChecker;
 

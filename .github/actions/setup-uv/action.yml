@@ -24,7 +24,7 @@ runs:
       shell: bash
       env:
         PYTHON_VERSION: ${{ inputs.python-version }}
-      run: |
+      run: | # zizmor: ignore[github-env] the values written are the action's own paths and inputs, and the step exists to put them on later steps
         uv venv --python "$PYTHON_VERSION" .venv
         echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
         echo "$PWD/.venv/bin" >> "$GITHUB_PATH"

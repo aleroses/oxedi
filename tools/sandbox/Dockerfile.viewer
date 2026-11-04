@@ -1,0 +1,83 @@
+# The image the viewer's checks run in: the base sandbox image plus Node, Chromium and the wasm
+# tools. Every input is pinned: Node by version and SHA-256, wasm-bindgen and binaryen by the
+# version and SHA-256 of crates/oxedi_wasm/scripts/install_tools.sh, Playwright by hash
+# (playwright.txt), and the Chromium it installs by the SHA-256 of its installed tree. The wasm
+# and Playwright arguments come from `make sandbox-image-viewer` (viewer_image.py reads them from
+# the repository); the image never runs install_tools.sh. The tag is
+# oxedi-sandbox-viewer:<first 12 hex of sha256 of the base tag, this file, playwright.txt,
+# install_tools.sh and viewer_image.py>.
+# No usable default: a build without --build-arg BASE_IMAGE fails on this name.
+ARG BASE_IMAGE=oxedi-sandbox:pass-BASE_IMAGE-with-make-sandbox-image-viewer
+FROM ${BASE_IMAGE}
+ARG TARGETARCH
+ARG NODE_VERSION=24.22.1
+ARG NODE_SHA256=6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6
+ARG WASM_BINDGEN_VERSION
+ARG WASM_BINDGEN_SHA256
+ARG BINARYEN_VERSION
+ARG BINARYEN_SHA256
+ARG PLAYWRIGHT_VERSION
+# SHA-256 of the installed chromium-headless-shell tree, each file with its mode and each symbolic
+# link with its target (viewer_image.py tree-digest). A new
+# Playwright pin installs another revision: build once with a wrong value, the failure prints the
+# digest found.
+ARG CHROMIUM_TREE_SHA256_AMD64=8476450b962800348045b21114aea523a12c9fcd86339ac2d70f196678fa0daf
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+COPY playwright.txt viewer_image.py /tmp/viewer/
+
+# curl and xz-utils are installed only for this step and purged in it. The browser's system
+# libraries (--with-deps) stay.
+RUN set -eu; \
+    [ "$TARGETARCH" = amd64 ] || { echo "sandbox-image-viewer: the wasm tools are pinned for amd64, not $TARGETARCH" >&2; exit 1; }; \
+    apt-get update; apt-get install -y --no-install-recommends curl xz-utils; \
+    node="node-v$NODE_VERSION-linux-x64"; \
+    curl --proto '=https' --tlsv1.2 -fsSL -o "/tmp/$node.tar.xz" "https://nodejs.org/dist/v$NODE_VERSION/$node.tar.xz"; \
+    echo "$NODE_SHA256  /tmp/$node.tar.xz" | sha256sum -c -; \
+    mkdir /opt/node; \
+    tar -xJf "/tmp/$node.tar.xz" -C /opt/node --strip-components=1; \
+    ln -s /opt/node/bin/node /usr/local/bin/node; \
+    rm "/tmp/$node.tar.xz"; \
+    rustup target add wasm32-unknown-unknown; \
+    bindgen="wasm-bindgen-$WASM_BINDGEN_VERSION-x86_64-unknown-linux-musl"; \
+    curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/bindgen.tar.gz \
+      "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$WASM_BINDGEN_VERSION/$bindgen.tar.gz"; \
+    echo "$WASM_BINDGEN_SHA256  /tmp/bindgen.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/bindgen.tar.gz -C /tmp "$bindgen/wasm-bindgen"; \
+    install -m 0755 "/tmp/$bindgen/wasm-bindgen" /usr/local/bin/wasm-bindgen; \
+    rm -r /tmp/bindgen.tar.gz "/tmp/$bindgen"; \
+    binaryen="binaryen-version_$BINARYEN_VERSION"; \
+    curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/binaryen.tar.gz \
+      "https://github.com/WebAssembly/binaryen/releases/download/version_$BINARYEN_VERSION/$binaryen-x86_64-linux.tar.gz"; \
+    echo "$BINARYEN_SHA256  /tmp/binaryen.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/binaryen.tar.gz -C /tmp "$binaryen/bin/wasm-opt"; \
+    install -m 0755 "/tmp/$binaryen/bin/wasm-opt" /usr/local/bin/wasm-opt; \
+    rm -r /tmp/binaryen.tar.gz "/tmp/$binaryen"; \
+    uv venv --python "$(command -v python3)" /tmp/playwright-venv; \
+    uv pip install --python /tmp/playwright-venv/bin/python --require-hashes --no-deps --only-binary :all: \
+      -r /tmp/viewer/playwright.txt; \
+    /tmp/playwright-venv/bin/playwright install --with-deps --only-shell chromium; \
+    found=$(python3 -I /tmp/viewer/viewer_image.py tree-digest --dir "$PLAYWRIGHT_BROWSERS_PATH"); \
+    if [ "$found" != "$CHROMIUM_TREE_SHA256_AMD64" ]; then \
+      echo "sandbox-image-viewer: the Chromium tree of playwright $PLAYWRIGHT_VERSION has digest $found but CHROMIUM_TREE_SHA256_AMD64 is $CHROMIUM_TREE_SHA256_AMD64; check the new revision, then set the argument" >&2; \
+      exit 1; \
+    fi; \
+    rm -r /tmp/playwright-venv /tmp/viewer; \
+    apt-get purge -y --auto-remove curl xz-utils; apt-get clean; \
+    find /var/lib/apt/lists -type f -delete; \
+    chmod -R a+rX /opt/node /opt/rustup /opt/ms-playwright
+
+# OXEDI_CHROMIUM_NO_SANDBOX makes the browser tests start Chromium with --no-sandbox: the container
+# is the sandbox (read-only root, no capabilities, no network), and Chromium's own needs user
+# namespaces the container does not grant.
+ENV OXEDI_CHROMIUM_NO_SANDBOX=1
+
+# The apt set is kept in /usr/share/oxedi-sandbox.manifest, replacing the base's; `make
+# sandbox-image-viewer` also copies it into the image labels.
+RUN dpkg-query -W > /usr/share/oxedi-sandbox.manifest
+LABEL org.opencontainers.image.title="oxedi-sandbox-viewer" \
+      oxedi.sandbox.node="$NODE_VERSION" \
+      oxedi.sandbox.playwright="$PLAYWRIGHT_VERSION" \
+      oxedi.sandbox.wasm-bindgen="$WASM_BINDGEN_VERSION" \
+      oxedi.sandbox.binaryen="$BINARYEN_VERSION"

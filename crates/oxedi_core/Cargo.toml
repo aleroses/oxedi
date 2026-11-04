@@ -23,6 +23,10 @@ sha2 = "0.10"
 proptest = "1"
 criterion = "0.8"
 
+# Sampling profiler behind `--profile-time` in the benches (benches/common/profiler.rs).
+[target.'cfg(unix)'.dev-dependencies]
+pprof = { version = "0.15", features = ["flamegraph"] }
+
 [[bench]]
 name = "tokenize"
 harness = false

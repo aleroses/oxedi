@@ -82,6 +82,11 @@ fn shift_days_matches_the_formula_for_two_known_pairs() {
     }
 }
 
+#[test]
+fn year_start_has_no_value_before_the_i32_range() {
+    assert_eq!(Mask::year_start(i32::MIN), None);
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(4096))]
     #[test]
@@ -95,12 +100,12 @@ proptest! {
 
 #[test]
 fn year_start_known_dates() {
-    assert_eq!(Mask::year_start(19_800), 19_723); // 2024-03-18
-    assert_eq!(Mask::year_start(10_956), 10_592); // 1999-12-31
-    assert_eq!(Mask::year_start(0), 0);
-    assert_eq!(Mask::year_start(-165), -365); // 1969-07-20
-    assert_eq!(Mask::year_start(11_016), 10_957); // 2000-02-29
-    assert_eq!(Mask::year_start(-25_508), -25_567); // 1900-03-01
+    assert_eq!(Mask::year_start(19_800), Some(19_723)); // 2024-03-18
+    assert_eq!(Mask::year_start(10_956), Some(10_592)); // 1999-12-31
+    assert_eq!(Mask::year_start(0), Some(0));
+    assert_eq!(Mask::year_start(-165), Some(-365)); // 1969-07-20
+    assert_eq!(Mask::year_start(11_016), Some(10_957)); // 2000-02-29
+    assert_eq!(Mask::year_start(-25_508), Some(-25_567)); // 1900-03-01
 }
 
 #[test]
@@ -145,4 +150,16 @@ fn display_unknown_date_mode() {
         "the mask date mode must be \"year\", \"shift\" or \"keep\"; got \"month\""
     );
     assert!(e.source().is_none());
+}
+
+#[test]
+fn date_mode_word_reads_back() {
+    for (mode, word) in [
+        (DateMode::Year, "year"),
+        (DateMode::Shift, "shift"),
+        (DateMode::Keep, "keep"),
+    ] {
+        assert_eq!(mode.word(), word);
+        assert_eq!(DateMode::parse(mode.word()), Ok(mode));
+    }
 }

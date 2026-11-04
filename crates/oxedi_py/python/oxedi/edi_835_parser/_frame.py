@@ -20,12 +20,10 @@ import functools
 import numpy as np
 
 from . import _codes
-from ._convert import ENCODING, element_date, has
+from ._convert import ENCODING, element_date
 from ._tables import ints, position
 
 UTF8 = codecs.lookup(ENCODING).name == "utf-8"
-# Bytes a segment's leading trivia can hold.
-WHITESPACE = b" \t\r\n"
 LIBRARY_COLUMNS = (
     "marker", "patient", "code", "modifier", "qualifier", "allowed_units", "billed_units",
     "transaction_date", "icn", "charge_amount", "allowed_amount", "paid_amount", "payer",
@@ -53,10 +51,6 @@ SERVICE_EXTRAS = (
     ("x_svc_adj", "rows_adjustment_groups", GROUP),
     ("x_svc_amt", "rows_service_amounts", AMOUNT),
 )
-FIRST_NAME = position("rows_claim_entities", "first_name")
-MODIFIER = position("rows", "modifier")
-ALLOWED_UNITS, _ = position("rows", "allowed_units")
-BILLED_UNITS, _ = position("rows", "billed_units")
 SERVICE_DATE, _ = position("rows_service_dates", "date")
 CLAIM_DATE, _ = position("rows_claim_dates", "date")
 
@@ -77,7 +71,7 @@ def objects(values):
 
 def text(column):
     """A binary column as text decoded as the library's ``open()`` decodes
-    (``None`` for null and for empty; ``holds`` tells an element written
+    (``None`` for null and for empty; ``empty`` tells an element written
     empty from one the segment stops before)."""
     import pyarrow as pa
 
@@ -89,6 +83,16 @@ def text(column):
         except pa.ArrowInvalid:
             pass
     return objects([v.decode(ENCODING) if v else None for v in column.to_pylist()])
+
+
+def empty(column):
+    """For each cell of a binary column, whether it holds an empty value: an
+    element the segment has but writes empty, as opposed to a null cell, an
+    element the segment stops before."""
+    import pyarrow.compute as pc
+
+    blank = pc.equal(pc.binary_length(column), 0)
+    return pc.fill_null(blank, False).to_numpy(zero_copy_only=False)
 
 
 def money(column):
@@ -150,37 +154,6 @@ def lookup(values, function):
         mapped[at] = function(value)
     mapped[-1] = function(None)
     return mapped[codes]
-
-
-def raws(document, segments):
-    """The raw bytes of each segment, as a binary array."""
-    import pyarrow as pa
-
-    return pa.array([document[segment].raw for segment in segments.tolist()], pa.binary())
-
-
-def holds(document, segments, raw, element, component=None):
-    """For each segment (``raw`` its bytes), whether it holds the element
-    (and component), even empty: counted from the separators in the raw
-    bytes, or read from the parsed elements when a release character can
-    escape a separator or when a separator is a whitespace byte, which the
-    raw bytes' leading trivia can also hold."""
-    import pyarrow as pa
-    import pyarrow.compute as pc
-
-    delimiters = document.delimiters
-    if (delimiters.release is not None or delimiters.element in WHITESPACE
-            or delimiters.component in WHITESPACE):
-        return np.array([has(document, segment, element, component) for segment in segments.tolist()],
-                        dtype=bool)
-    found = pc.count_substring(raw, pattern=delimiters.element).to_numpy(zero_copy_only=False) >= element
-    if component is not None and found.any():
-        at = np.flatnonzero(found)
-        parts = pc.split_pattern(raw.take(pa.array(at)), pattern=delimiters.element, max_splits=element + 1)
-        value = pc.list_element(parts, element)
-        components = pc.count_substring(value, pattern=delimiters.component).to_numpy(zero_copy_only=False)
-        found[at] = components + 1 >= component
-    return found
 
 
 def as_integer(value):
@@ -302,17 +275,10 @@ class Transaction:
     def entity_names(self):
         """Each claim entity's ``name``, as the library's property spells it."""
         table = self.table("rows_claim_entities")
-        segments = table.column("segment").to_pylist()
-        firsts = text(table.column("first_name")).tolist()
+        firsts = text(table.column("first_name"))
+        firsts[empty(table.column("first_name"))] = ""
         lasts = text(table.column("last_name")).tolist()
-        missing = [at for at, first in enumerate(firsts) if first is None and segments[at] is not None]
-        if missing:
-            chosen = np.array([segments[at] for at in missing], dtype=np.int64)
-            written = holds(self.document, chosen, raws(self.document, chosen), *FIRST_NAME)
-            for at, found in zip(missing, written.tolist()):
-                if found:
-                    firsts[at] = ""
-        names = [f"{first} {last or ''}".title() for first, last in zip(firsts, lasts)]
+        names = [f"{first} {last or ''}".title() for first, last in zip(firsts.tolist(), lasts)]
         return objects(names), ints(table.column("segment"))
 
     def entity(self, column):
@@ -340,36 +306,6 @@ class Transaction:
         }
 
     @functools.cached_property
-    def service_raws(self):
-        """The raw bytes of the SVC segments of the services with a null or
-        empty cell among the columns whose value depends on how the segment
-        was written, and each service's position among them (-1 for none)."""
-        import pyarrow.compute as pc
-
-        services = self.services
-        segments = ints(services.column("segment"))
-        need = segments >= 0
-        null = np.zeros(len(segments), dtype=bool)
-        for column in ("modifier", "allowed_units", "billed_units"):
-            cells = services.column(column)
-            null |= cells.is_null().to_numpy(zero_copy_only=False)
-            null |= np.equal(pc.binary_length(cells).to_numpy(zero_copy_only=False), 0)
-        rows = np.flatnonzero(need & null)
-        where = np.full(len(segments), -1)
-        where[rows] = np.arange(len(rows))
-        return where, segments[rows], raws(self.document, segments[rows])
-
-    def written(self, values, element, component=None):
-        """For each service whose cell is null, whether its SVC segment holds
-        the element (and component), even empty."""
-        where, segments, raw = self.service_raws
-        rows = np.flatnonzero(np.equal(values, None) & (where >= 0))
-        out = np.zeros(len(values), dtype=bool)
-        if len(rows):
-            out[rows] = holds(self.document, segments[where[rows]], raw.take(where[rows]), element, component)
-        return out
-
-    @functools.cached_property
     def allowed_amount(self):
         """The service's last AMT amount when its qualifier is the allowed
         amount: the library keeps the last AMT it reads."""
@@ -395,21 +331,23 @@ class Transaction:
             found |= here
         return found, values
 
+    def units(self, column, absent):
+        """The service units of ``column``: a unit count, ``None`` for units
+        the SVC segment holds empty and ``absent`` for units it stops before."""
+        cells = self.services.column(column)
+        units = lookup(text(cells), as_integer)
+        return np.where(np.equal(units, None), np.where(empty(cells), None, absent), units).astype(object)
+
     @functools.cached_property
     def service_columns(self):
         """The library columns' service values, in table order."""
         services = self.services
         paid = money(services.column("paid_amount"))
         modifier = text(services.column("modifier"))
-        empty = np.equal(modifier, None) & self.written(modifier, *MODIFIER)
-        modifier = np.where(empty, "", modifier).astype(object)
-        units = lookup(text(services.column("allowed_units")), as_integer)
+        modifier[empty(services.column("modifier"))] = ""
         absent = np.where(np.equal(paid, 0) & ~np.equal(paid, None), 0, 1).astype(object)
-        allowed = np.where(np.equal(units, None),
-                           np.where(self.written(units, ALLOWED_UNITS), None, absent), units).astype(object)
-        units = lookup(text(services.column("billed_units")), as_integer)
-        billed = np.where(np.equal(units, None),
-                          np.where(self.written(units, BILLED_UNITS), None, allowed), units).astype(object)
+        allowed = self.units("allowed_units", absent)
+        billed = self.units("billed_units", allowed)
         return {
             "code": text(services.column("code")),
             "modifier": modifier,

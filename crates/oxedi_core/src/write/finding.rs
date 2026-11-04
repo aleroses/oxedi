@@ -3,9 +3,9 @@
 
 use std::fmt;
 
-use crate::column::ColumnType;
 use crate::diagnostic::{Diagnostic, Quoted};
 use crate::document::DocumentError;
+use crate::value::{ColumnType, ElementTextError};
 
 use super::refusal::PlanError;
 
@@ -149,7 +149,7 @@ pub enum Finding {
         /// The value as text.
         value: String,
         /// Why, e.g. `a date needs a year from 1 to 9999`.
-        reason: String,
+        reason: ElementTextError,
     },
     /// A diagnostic from reading the written file back, with where the
     /// value at fault came from when the writer knows it.

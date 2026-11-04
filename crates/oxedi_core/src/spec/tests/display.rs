@@ -1,8 +1,9 @@
 //! The full text of every error and diagnostic.
 
 use super::element_error;
-use crate::spec::raw::{RawColumn, RawLoop, RawSpec, RawTable};
+use crate::spec::raw::{RawColumn, RawLoop, RawSpec, RawSummary, RawTable};
 use crate::spec::*;
+use crate::value::ElementType;
 use serde_json::Value;
 
 fn json_error(text: &str) -> serde_json::Error {
@@ -335,7 +336,59 @@ fn no_spec_error_chains_its_source() {
         path: String::new(),
         key: "name",
     };
-    for err in [SpecError::Json(json_error("{")), schema, patch, key] {
+    let summary = SpecError::SummarySchema {
+        summary: "s".into(),
+        source: json_error("{"),
+    };
+    let bad_summary = SpecError::BadSummary {
+        summary: "s".into(),
+        reason: Box::new(SummaryDefError::EmptyName),
+    };
+    let default_table = SpecError::UnknownDefaultTable {
+        table: "t".into(),
+        known: Vec::new(),
+    };
+    for err in [
+        SpecError::Json(json_error("{")),
+        schema,
+        patch,
+        key,
+        summary,
+        bad_summary,
+        default_table,
+    ] {
         assert!(err.source().is_none(), "{err}");
     }
+}
+
+#[test]
+fn summary_errors_display_the_summary_and_the_reason() {
+    let schema = SpecError::SummarySchema {
+        summary: "sum_payments".into(),
+        source: serde_json::from_value::<RawSummary>(serde_json::json!(1)).unwrap_err(),
+    };
+    assert_eq!(
+        schema.to_string(),
+        "summary \"sum_payments\" does not match the schema: invalid type: integer `1`, \
+         expected a summary object"
+    );
+    let bad = SpecError::BadSummary {
+        summary: "payer".into(),
+        reason: Box::new(SummaryDefError::NoFields {
+            key: "row.fields".into(),
+        }),
+    };
+    assert_eq!(
+        bad.to_string(),
+        "summary \"payer\": row.fields lists no field"
+    );
+    let default_table = SpecError::UnknownDefaultTable {
+        table: "claim".into(),
+        known: vec!["claims".into(), "payments".into()],
+    };
+    assert_eq!(
+        default_table.to_string(),
+        "default_table names the table \"claim\", which the spec does not define; its tables \
+         are: claims, payments"
+    );
 }

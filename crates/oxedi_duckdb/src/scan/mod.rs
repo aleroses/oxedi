@@ -11,18 +11,15 @@ mod write;
 use std::sync::Arc;
 
 use libduckdb_sys as ffi;
-use oxedi_core::{ColumnType, Document, Mask, Processor, Table};
+use oxedi_core::{ColumnType, Document, DocumentError, Mask, Processor, Table};
 
-use crate::builtins::{Builtin, Builtins};
+use crate::builtins::{BuiltinSchema, Builtins};
 use crate::diagnostics;
 use crate::error::ReadError;
 use crate::files::FileSystem;
 use crate::types::SqlType;
 use write::Place;
 pub(crate) use write::Vector;
-
-/// The column every table carries with each row's ordinal.
-const ROW_COLUMN: &str = "row";
 
 /// Everything the bind settled, read by the scan.
 #[derive(Debug)]
@@ -125,7 +122,7 @@ impl Scan {
                 file,
                 table: &bound.table,
                 column: name,
-                rows: table.column(ROW_COLUMN),
+                rows: table.column(oxedi_core::spec::ROW_COLUMN),
             };
             vector.fill(data, *sql, start, len, &place)?;
         }
@@ -146,78 +143,96 @@ fn load(bound: &Bound, file: &str) -> Result<Table, ReadError> {
     let bytes = bound.file_system.read_all(file)?;
     let document = match Document::parse(bytes.as_slice()) {
         Ok(document) => document,
-        Err(source) if bound.ignore_errors => {
-            if !bound.diagnostics {
-                return Ok(Table::new(bound.table.clone(), bound.columns.clone()));
-            }
-            let datum = diagnostics::datum(&source, &bytes).to_vec();
-            let error = ReadError::Parse {
-                file: file.to_owned(),
-                source,
-            };
-            return diagnostics::of_unparsable(&error, &datum, bound.binary);
-        }
-        Err(source) => {
-            return Err(ReadError::Parse {
-                file: file.to_owned(),
-                source,
-            });
-        }
+        Err(source) => return unparsable(bound, file, &bytes, source),
     };
-    let builtin = if bound.forced {
-        bound.builtins.by_version(bound.bound_version)
-    } else {
-        Some(bound.builtins.select(document.segments()))
+    let builtin = builtin_of(bound, file, &document)?;
+    if bound.diagnostics {
+        // Every table is filled: a text value too large to store is a
+        // finding of the table that would hold it.
+        let (_tables, findings) = Processor::run(builtin.spec(), &document, bound.mask.as_ref());
+        return diagnostics::of_findings(&findings);
     }
-    .ok_or_else(|| ReadError::Internal {
+    check_schema(bound, file, builtin)?;
+    project(builtin, &document, &bound.table, file, bound.mask.as_ref())
+}
+
+/// What a file that cannot be parsed gives: its error, or with
+/// `ignore_errors` an empty table, or for `diagnostics` the one row that
+/// reports it.
+fn unparsable(
+    bound: &Bound,
+    file: &str,
+    bytes: &[u8],
+    source: DocumentError,
+) -> Result<Table, ReadError> {
+    if bound.ignore_errors && !bound.diagnostics {
+        return Ok(Table::new(bound.table.clone(), bound.columns.clone()));
+    }
+    let datum = diagnostics::datum(&source, bytes).to_vec();
+    let error = ReadError::Parse {
+        file: file.to_owned(),
+        source,
+    };
+    if bound.ignore_errors {
+        return diagnostics::of_unparsable(&error, &datum, bound.binary);
+    }
+    Err(error)
+}
+
+/// The built-in that reads `document`: the bound version when it was named,
+/// else the one the file declares.
+fn builtin_of<'b>(
+    bound: &'b Bound,
+    file: &str,
+    document: &Document<'_>,
+) -> Result<&'b BuiltinSchema, ReadError> {
+    let picked = if bound.forced {
+        bound.builtins.by_version(bound.bound_version).ok()
+    } else {
+        bound.builtins.select(document.segments())
+    };
+    picked.ok_or_else(|| ReadError::Internal {
         message: format!(
             "{file:?}: no built-in spec for version {}",
             bound.bound_version
         ),
-    })?;
-    if bound.diagnostics {
-        // Every table is filled: a text value too large to store is a
-        // finding of the table that would hold it.
-        let (_tables, findings) = match &bound.mask {
-            Some(mask) => Processor::run_masked(&builtin.spec, &document, mask),
-            None => Processor::run(&builtin.spec, &document),
-        };
-        return diagnostics::of_findings(&findings);
-    }
+    })
+}
+
+/// Refuses a built-in that does not project the bound table with the bound
+/// columns.
+fn check_schema(bound: &Bound, file: &str, builtin: &BuiltinSchema) -> Result<(), ReadError> {
     let same = builtin
         .table(&bound.table)
         .is_some_and(|table| table.columns == bound.columns);
-    if !same {
-        return Err(ReadError::SchemaMismatch {
-            file: file.to_owned(),
-            table: bound.table.clone(),
-            version: builtin.version,
-            bound: bound.bound_version,
-        });
+    if same {
+        return Ok(());
     }
-    project(builtin, &document, &bound.table, file, bound.mask.as_ref())
+    Err(ReadError::SchemaMismatch {
+        file: file.to_owned(),
+        table: bound.table.clone(),
+        version: builtin.version(),
+        bound: bound.bound_version,
+    })
 }
 
 /// Fills the table `name` alone from the document, with the rows a run that
 /// fills every table gives it.
 fn project(
-    builtin: &Builtin,
+    builtin: &BuiltinSchema,
     document: &Document<'_>,
     name: &str,
     file: &str,
     mask: Option<&Mask>,
 ) -> Result<Table, ReadError> {
-    match mask {
-        Some(mask) => Processor::run_tables_masked(&builtin.spec, document, &[name], mask),
-        None => Processor::run_tables(&builtin.spec, document, &[name]),
-    }
-    .map_err(|error| ReadError::Internal {
-        message: format!("{file:?}: {error}"),
-    })?
-    .remove(name)
-    .ok_or_else(|| ReadError::Internal {
-        message: format!("{file:?}: the parsed file has no table {name:?}"),
-    })
+    Processor::run_tables(builtin.spec(), document, &[name], mask)
+        .map_err(|error| ReadError::Internal {
+            message: format!("{file:?}: {error}"),
+        })?
+        .remove(name)
+        .ok_or_else(|| ReadError::Internal {
+            message: format!("{file:?}: the parsed file has no table {name:?}"),
+        })
 }
 
 #[cfg(test)]

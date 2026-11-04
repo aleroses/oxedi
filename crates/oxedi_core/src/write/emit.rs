@@ -11,6 +11,7 @@
 
 use crate::column::Cell;
 use crate::spec::{ControlCount, LoopId, Spec};
+use crate::value::{date_display, time_display};
 
 use super::data::Data;
 use super::envelope::{Envelope, Field, control_text, trigger_values};
@@ -19,7 +20,7 @@ use super::layout::{Item, Layout};
 use super::nest::Nest;
 use super::plan::{Instances, SegmentPlan, SegmentSource, ValueSource, WritePlan};
 use super::refusal::place;
-use super::render::{Part, Separators, date_display};
+use super::render::{Part, Separators};
 use super::trace::{Src, Traces};
 use super::walk::Context;
 
@@ -204,7 +205,7 @@ impl Emitter<'_> {
                 }
                 if let Some(reason) = value.refused {
                     let shown = match field {
-                        Field::Time => format!("time32({})", self.envelope.time),
+                        Field::Time => time_display(self.envelope.time),
                         _ => date_display(self.envelope.date),
                     };
                     self.findings.push(Finding::NotWritable {

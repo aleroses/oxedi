@@ -38,15 +38,18 @@ fn unknown_and_missing_keys_display_the_key_and_the_path() {
             SpecError::UnknownKey {
                 path: "segments.CLP.elements.3".into(),
                 key: "lenght".into(),
+                allowed: vec!["max", "min", "name"],
             },
-            "spec: unknown key \"lenght\" at segments.CLP.elements.3",
+            "spec: unknown key \"lenght\" at segments.CLP.elements.3; the allowed keys are: \
+             max, min, name",
         ),
         (
             SpecError::UnknownKey {
                 path: String::new(),
                 key: "tabels".into(),
+                allowed: vec!["loops", "name"],
             },
-            "spec: unknown key \"tabels\" at the top level",
+            "spec: unknown key \"tabels\" at the top level; the allowed keys are: loops, name",
         ),
         (
             SpecError::MissingKey {

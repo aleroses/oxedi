@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-rust
         with:
           components: clippy, rustfmt
@@ -30,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: test
@@ -39,9 +43,14 @@ jobs:
         run: cargo test --workspace --locked
       - name: Benches compile
         run: cargo bench --workspace --no-run --locked
+      - name: Normal dependencies of the published crates
+        run: make deps-check
+      - uses: ./.github/actions/setup-uv
+        with:
+          python-version: "3.13"
       - name: Stub drift
         run: |
-          cargo run --locked -p oxedi_py --bin stub_gen
+          make stubs
           git diff --exit-code crates/oxedi_py/python/oxedi/_core.pyi
       - name: PyPI README drift
         run: make readme-py-check

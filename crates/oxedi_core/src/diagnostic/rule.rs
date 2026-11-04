@@ -1,6 +1,6 @@
 //! The rules a diagnostic reports, their SNIP levels and variant names.
 
-use crate::spec::ElementType;
+use crate::value::ElementType;
 
 use super::SnipLevel;
 

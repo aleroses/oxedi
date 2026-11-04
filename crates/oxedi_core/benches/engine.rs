@@ -123,10 +123,9 @@ fn engine_fragment(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    engine_samples,
-    engine_events_samples,
-    engine_fragment
-);
+criterion_group! {
+    name = benches;
+    config = common::profiled();
+    targets = engine_samples, engine_events_samples, engine_fragment
+}
 criterion_main!(benches);

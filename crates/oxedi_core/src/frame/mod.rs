@@ -7,6 +7,7 @@
 //! first frame ([`first_frame`]); anywhere else it is data.
 
 use crate::delimiters::Delimiters;
+use crate::trivia::{BYTE_ORDER_MARK, is_trivia};
 
 /// One segment's worth of bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,32 +19,6 @@ pub struct Frame<'a> {
     pub body: &'a [u8],
     /// `false` only for the last frame of an input that does not end with a terminator.
     pub terminated: bool,
-}
-
-/// Bytes tolerated between a terminator and the next segment.
-pub const fn is_trivia(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\r' | b'\n')
-}
-
-/// The UTF-8 byte order mark some editors write at the start of a file.
-pub const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
-
-/// How many bytes precede the first segment's text: a leading byte order
-/// mark, then any trivia.
-pub fn leading_trivia(input: &[u8]) -> usize {
-    let skipped = if input.starts_with(BYTE_ORDER_MARK) {
-        BYTE_ORDER_MARK.len()
-    } else {
-        0
-    };
-    // `skipped` is either 0 or the length of a byte order mark that `starts_with`
-    // just matched, so it is within `input`.
-    let rest = &input[skipped..];
-    skipped
-        + rest
-            .iter()
-            .position(|&byte| !is_trivia(byte))
-            .unwrap_or(rest.len())
 }
 
 /// Splits the first frame off the front of a whole input: as [`next_frame`],

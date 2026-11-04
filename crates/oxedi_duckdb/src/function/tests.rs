@@ -1,5 +1,7 @@
-use super::{c_message, guarded, panic_message};
+use super::{c_message, guarded, panic_message, table_name};
+use crate::builtins::Builtins;
 use crate::error::ReadError;
+use crate::options::TableChoice;
 
 #[test]
 fn a_panic_becomes_an_internal_error() {
@@ -30,5 +32,29 @@ fn nul_bytes_are_written_out() {
     assert_eq!(
         c_message(&error).to_str().ok(),
         Some("read_835: internal error: a\\0b")
+    );
+}
+
+#[test]
+fn without_table_name_the_spec_default_table_is_read() {
+    let builtins = Builtins::load();
+    for builtin in builtins.iter() {
+        let expected = builtin.spec().default_table();
+        assert!(expected.is_some(), "{}", builtin.version());
+        assert_eq!(
+            table_name(builtin, &TableChoice::SpecDefault).ok(),
+            expected
+        );
+        assert!(builtin.table(expected.unwrap_or_default()).is_some());
+    }
+}
+
+#[test]
+fn a_named_table_is_read_as_named() {
+    let builtins = Builtins::load();
+    let choice = TableChoice::Named("diagnostics".to_owned());
+    assert_eq!(
+        table_name(builtins.default(), &choice).ok(),
+        Some("diagnostics")
     );
 }

@@ -113,7 +113,7 @@ fn a_version_of_the_wrong_shape_is_named_with_its_path() {
         ),
         (
             r#"{"segment":"GS","element":8,"values":["X"],"value":"X"}"#,
-            "spec: unknown key \"value\" at version",
+            "spec: unknown key \"value\" at version; the allowed keys are: element, segment, values",
         ),
         (
             r#"{"segment":"GS","element":"8","values":["X"]}"#,

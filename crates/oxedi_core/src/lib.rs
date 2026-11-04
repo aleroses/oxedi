@@ -23,7 +23,8 @@
 //!   tables, typed [`Table`]s of [`ColumnData`] laid out as Apache Arrow
 //!   lays out its arrays, with each row pointing at the rows that enclose it.
 //!   [`spec_schema`] gives those tables' columns, types and references from
-//!   the spec alone, without a file.
+//!   the spec alone, without a file. [`summarize`] computes the summaries
+//!   the spec declares (counts, sums, the fields of one row) over them.
 //! - [`write::write()`] turns tables with a spec's schema back into an
 //!   interchange: the spec's projection inverted, the loop tree rebuilt from
 //!   the tables' references, the envelope's counts and control numbers
@@ -48,17 +49,17 @@ pub mod process;
 pub mod project;
 pub mod segment;
 pub mod spec;
+pub mod summary;
 pub mod tokenizer;
 pub mod tree;
+pub mod trivia;
+pub mod value;
 pub mod write;
 
 pub use check::StructureChecker;
-pub use column::{
-    Bitmap, Cell, CellError, Column, ColumnData, ColumnType, RowError, Table, Tables, parse_dt,
-    parse_n, parse_r, parse_tm,
-};
+pub use column::{Bitmap, Cell, CellError, Column, ColumnData, RowError, Table, Tables};
 pub use delimiters::{Delimiters, IsaError};
-pub use diagnostic::{Diagnostic, LoopRef, Rule, SnipLevel};
+pub use diagnostic::{Diagnostic, FlatDiagnostic, LoopRef, PARSER_ORIGIN, Rule, SnipLevel};
 pub use document::{Document, DocumentError, Segments, SizeError, Span, Spans};
 pub use element::{Element, Value};
 pub use engine::{Event, LoopEngine};
@@ -68,11 +69,13 @@ pub use process::{Output, Processor};
 pub use project::{ColumnSchema, Projector, TableSchema, UnknownTable, spec_schema};
 pub use segment::{Segment, SegmentWriteError};
 pub use spec::{
-    AnchorChains, AnchorPositions, BalanceError, BalanceRule, BalanceTerm, ColumnSource, Control,
-    ControlCount, ControlError, DeclaredVersion, ElementDef, ElementDefError, ElementType, LoopDef,
-    LoopId, LoopSegments, Pick, Repeat, SegmentDef, Spec, SpecError, TableDef, TableDefError,
-    Trigger, VersionError, merge_patch,
+    AnchorChains, AnchorPositions, BalanceError, BalanceRule, BalanceTerm, Builtin, ColumnSource,
+    Control, ControlCount, ControlError, DeclaredVersion, ElementDef, ElementDefError, LoopDef,
+    LoopId, LoopSegments, Pick, Repeat, SegmentDef, Spec, SpecError, Summary, SummaryDefError,
+    TableDef, TableDefError, Trigger, UnknownVersion, Version, VersionError, merge_patch,
 };
+pub use summary::{SummaryError, SummaryValue, summarize};
 pub use tokenizer::Tokenizer;
 pub use tree::{LoopTree, Node, NodeId, TreeBuilder};
+pub use value::{ColumnType, ConvertError, ElementType, parse_dt, parse_n, parse_r, parse_tm};
 pub use write::{PlanError, Refusal, WritePlan};

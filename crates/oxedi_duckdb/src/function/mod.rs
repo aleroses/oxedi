@@ -9,12 +9,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use libduckdb_sys as ffi;
+use oxedi_core::ColumnType;
 
-use crate::builtins::Builtins;
+use crate::builtins::{BuiltinSchema, Builtins};
 use crate::diagnostics;
 use crate::error::{FUNCTION, ReadError};
-use crate::files::{self, CallerSettings, ClientContext};
-use crate::options::{NAMED, Options};
+use crate::files::{self, CallerSettings, ClientContext, FileSystem};
+use crate::options::{NAMED, Options, TableChoice};
 use crate::scan::{Bound, Scan};
 use crate::types::{self, SqlType};
 
@@ -141,66 +142,100 @@ unsafe extern "C" fn bind(info: ffi::duckdb_bind_info) {
     }
 }
 
+/// The table `read_835` returns and its columns, settled by the options.
+struct Shape {
+    table: String,
+    columns: Vec<(String, ColumnType)>,
+    types: Vec<SqlType>,
+}
+
+impl Shape {
+    /// The shape of the table `options` names: the diagnostics, or one of
+    /// `builtin`'s tables.
+    fn of(builtin: &BuiltinSchema, options: &Options) -> Result<Shape, ReadError> {
+        let name = table_name(builtin, &options.table_name)?;
+        if name == diagnostics::TABLE {
+            return Ok(Shape {
+                table: diagnostics::TABLE.to_owned(),
+                columns: diagnostics::columns(),
+                types: diagnostics::types(options.binary)?,
+            });
+        }
+        let table = builtin.table(name).ok_or_else(|| ReadError::UnknownTable {
+            table: name.to_owned(),
+            known: builtin
+                .table_names()
+                .into_iter()
+                .chain([diagnostics::TABLE.to_owned()])
+                .collect(),
+        })?;
+        let types = table
+            .columns
+            .iter()
+            .map(|(column, kind)| SqlType::of(&table.name, column, *kind, options.binary))
+            .collect::<Result<_, _>>()?;
+        Ok(Shape {
+            table: table.name.clone(),
+            columns: table.columns.clone(),
+            types,
+        })
+    }
+}
+
+/// The table `table_name` names, or the default table of `builtin`'s spec.
+fn table_name<'a>(
+    builtin: &'a BuiltinSchema,
+    choice: &'a TableChoice,
+) -> Result<&'a str, ReadError> {
+    match choice {
+        TableChoice::Named(name) => Ok(name),
+        TableChoice::SpecDefault => {
+            builtin
+                .spec()
+                .default_table()
+                .ok_or_else(|| ReadError::Internal {
+                    message: format!(
+                        "the built-in spec for version {} declares no default table",
+                        builtin.version()
+                    ),
+                })
+        }
+    }
+}
+
+fn no_context(what: &str) -> ReadError {
+    ReadError::Internal {
+        message: format!("the bind has no {what}"),
+    }
+}
+
+/// The built-ins `read_835` was registered with.
+///
 /// # Safety
 ///
 /// `info` must be the live bind info of `read_835`.
-unsafe fn bind_with(info: ffi::duckdb_bind_info) -> Result<(), ReadError> {
+unsafe fn extra_info<'a>(info: ffi::duckdb_bind_info) -> Result<&'a Arc<Builtins>, ReadError> {
     // SAFETY: the extra info of `read_835` is the `Arc<Builtins>` set at
     // registration, alive as long as the function.
-    let builtins = unsafe {
+    unsafe {
         ffi::duckdb_bind_get_extra_info(info)
             .cast::<Arc<Builtins>>()
             .as_ref()
     }
     .ok_or_else(|| ReadError::Internal {
         message: "the function has no extra info".to_owned(),
-    })?;
-    // SAFETY: `info` is the live bind info of `read_835` (caller contract).
-    let options = unsafe { Options::of_bind(info) }?;
-    let builtin = match &options.version {
-        Some(version) => builtins
-            .by_version(version)
-            .ok_or_else(|| ReadError::UnknownVersion {
-                version: version.clone(),
-                known: builtins.versions(),
-            })?,
-        None => builtins.default(),
-    };
-    let (table, columns, types) = if options.table_name == diagnostics::TABLE {
-        (
-            diagnostics::TABLE.to_owned(),
-            diagnostics::columns(),
-            diagnostics::types(options.binary)?,
-        )
-    } else {
-        let table = builtin
-            .table(&options.table_name)
-            .ok_or_else(|| ReadError::UnknownTable {
-                table: options.table_name.clone(),
-                known: builtin
-                    .table_names()
-                    .into_iter()
-                    .chain([diagnostics::TABLE.to_owned()])
-                    .collect(),
-            })?;
-        let types = table
-            .columns
-            .iter()
-            .map(|(column, kind)| SqlType::of(&table.name, column, *kind, options.binary))
-            .collect::<Result<Vec<_>, _>>()?;
-        (table.name.clone(), table.columns.clone(), types)
-    };
-    for ((column, _), sql) in columns.iter().zip(&types) {
-        // SAFETY: `info` is the live bind info (caller contract).
-        unsafe { add_column(info, column, *sql) }?;
-    }
-    if options.filename {
-        // SAFETY: as above.
-        unsafe { add_column(info, FILENAME_COLUMN, SqlType::Varchar) }?;
-    }
-    let no_context = |what: &str| ReadError::Internal {
-        message: format!("the bind has no {what}"),
-    };
+    })
+}
+
+/// The files the call reads, and the file system that reads them.
+///
+/// # Safety
+///
+/// `info` must be the live bind info of `read_835`.
+unsafe fn caller_files(
+    info: ffi::duckdb_bind_info,
+    options: &Options,
+) -> Result<(Vec<String>, FileSystem), ReadError> {
     // SAFETY: `info` is the live bind info (caller contract); the context
     // is dropped at the end of this function.
     let context =
@@ -211,15 +246,32 @@ unsafe fn bind_with(info: ffi::duckdb_bind_info) -> Result<(), ReadError> {
         .file_system()
         .ok_or_else(|| no_context("file system"))?;
     let files = files::resolve(&options.paths, &CallerSettings::of(&context), &file_system)?;
+    Ok((files, file_system))
+}
+
+/// # Safety
+///
+/// `info` must be the live bind info of `read_835`.
+unsafe fn bind_with(info: ffi::duckdb_bind_info) -> Result<(), ReadError> {
+    // SAFETY: `info` is the live bind info (caller contract).
+    let builtins = unsafe { extra_info(info) }?;
+    // SAFETY: as above.
+    let options = unsafe { Options::of_bind(info) }?;
+    let builtin = builtins.pick(options.version.as_deref())?;
+    let shape = Shape::of(builtin, &options)?;
+    // SAFETY: as above.
+    unsafe { add_columns(info, &shape, options.filename) }?;
+    // SAFETY: as above.
+    let (files, file_system) = unsafe { caller_files(info, &options) }?;
     let bound = Bound {
         files,
         file_system,
         builtins: Arc::clone(builtins),
-        diagnostics: table == diagnostics::TABLE,
-        table,
-        columns,
-        types,
-        bound_version: builtin.version,
+        diagnostics: shape.table == diagnostics::TABLE,
+        table: shape.table,
+        columns: shape.columns,
+        types: shape.types,
+        bound_version: builtin.version(),
         forced: options.version.is_some(),
         filename: options.filename,
         ignore_errors: options.ignore_errors,
@@ -234,6 +286,28 @@ unsafe fn bind_with(info: ffi::duckdb_bind_info) -> Result<(), ReadError> {
             Box::into_raw(Box::new(bound)).cast(),
             Some(drop_box::<Bound>),
         );
+    }
+    Ok(())
+}
+
+/// Adds the result columns of `shape` to the bind, then the file name column
+/// when `filename` is set.
+///
+/// # Safety
+///
+/// `info` must be the live bind info of the running bind callback.
+unsafe fn add_columns(
+    info: ffi::duckdb_bind_info,
+    shape: &Shape,
+    filename: bool,
+) -> Result<(), ReadError> {
+    for ((column, _), sql) in shape.columns.iter().zip(&shape.types) {
+        // SAFETY: `info` is the live bind info (caller contract).
+        unsafe { add_column(info, column, *sql) }?;
+    }
+    if filename {
+        // SAFETY: as above.
+        unsafe { add_column(info, FILENAME_COLUMN, SqlType::Varchar) }?;
     }
     Ok(())
 }

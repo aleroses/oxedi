@@ -105,16 +105,6 @@ fn a_byte_order_mark_after_the_first_frame_is_data() {
 }
 
 #[test]
-fn leading_trivia_counts_a_byte_order_mark_and_whitespace() {
-    assert_eq!(leading_trivia(b"\xEF\xBB\xBF \r\nISA"), 6);
-    assert_eq!(leading_trivia(b"\r\nISA"), 2);
-    assert_eq!(leading_trivia(b"ISA"), 0);
-    assert_eq!(leading_trivia(b" \xEF\xBB\xBFISA"), 1);
-    assert_eq!(leading_trivia(b"\xEF\xBB\xBF"), 3);
-    assert_eq!(leading_trivia(b""), 0);
-}
-
-#[test]
 fn empty_input_yields_no_frame() {
     assert_eq!(next_frame(b"", &plain()), None);
 }

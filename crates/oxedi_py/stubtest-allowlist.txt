@@ -1,0 +1,4 @@
+# The defaults of Envelope's qualifiers, usage indicator and control number are the core's
+# constants; pyo3 shows a default it cannot print as `...` at runtime, while the stub shows the
+# value. test_envelope_runtime_parameters_are_pinned pins the parameters and what they default to.
+oxedi._core.Envelope.__new__

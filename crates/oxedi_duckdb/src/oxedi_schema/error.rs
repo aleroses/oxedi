@@ -30,10 +30,8 @@ pub enum SchemaError {
     },
     /// `version` names no built-in spec.
     UnknownVersion {
-        /// The version given.
-        version: String,
-        /// The versions of the built-in specs.
-        known: Vec<&'static str>,
+        /// The core's account of the version given and the versions there are.
+        source: oxedi_core::UnknownVersion,
     },
     /// A column type of the core has no DuckDB type here.
     UnsupportedType {
@@ -52,6 +50,12 @@ pub enum SchemaError {
     },
 }
 
+impl From<oxedi_core::UnknownVersion> for SchemaError {
+    fn from(source: oxedi_core::UnknownVersion) -> SchemaError {
+        SchemaError::UnknownVersion { source }
+    }
+}
+
 impl fmt::Display for SchemaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -68,15 +72,7 @@ impl fmt::Display for SchemaError {
                      =>, so write version = {written}"
                 )
             }
-            SchemaError::UnknownVersion { version, known } => write!(
-                f,
-                "{FUNCTION}: unknown version {version:?}; version must be one of {}",
-                known
-                    .iter()
-                    .map(|name| format!("{name:?}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            SchemaError::UnknownVersion { source } => write!(f, "{FUNCTION}: {source}"),
             SchemaError::UnsupportedType {
                 table,
                 column,

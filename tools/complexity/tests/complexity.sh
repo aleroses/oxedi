@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Checks complexity.py's comparison with a baseline on hand-written measurements (no lizard).
-# Run: .github/scripts/tests/complexity.sh
+# Run: tools/complexity/tests/complexity.sh
 set -uo pipefail
 
-script="$(dirname "$0")/../complexity.py"
+script="$(cd "$(dirname "$0")/.." && pwd)/complexity.py"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 failed=0
@@ -166,6 +166,178 @@ if [ "$depths" != "[(1, 3), (11, 2), (20, 0)]" ]; then
   echo "FAIL: Python nesting: wanted [(1, 3), (11, 2), (20, 0)], got $depths"
   failed=1
 fi
+
+# ---- the touch rule: a change that modifies a baseline function must leave it within the targets.
+# These cases build a throwaway git repository, so the changed lines are real diffs.
+
+repo="$tmp/repo"
+
+# new_repo: a repository whose branch `base` holds a.rs of 20 lines.
+new_repo() {
+  rm -rf "$repo"
+  mkdir "$repo"
+  git -C "$repo" init -q -b main
+  git -C "$repo" config user.email t@example.com
+  git -C "$repo" config user.name t
+  seq 1 20 | sed 's/^/line /' > "$repo/a.rs"
+  git -C "$repo" add a.rs
+  git -C "$repo" commit -q -m base
+  git -C "$repo" branch base
+}
+
+# in_repo STATUS PATTERN [ARGS...]: like expect, run inside the repository against `base`.
+in_repo() {
+  local status=$1 pattern=$2 output actual
+  shift 2
+  output=$(cd "$repo" && python3 "$script" "$tmp/baseline" --measurements "$tmp/measured.csv" \
+    --base base "$@" 2>&1)
+  actual=$?
+  if [ "$actual" != "$status" ] || ! grep -qE -- "$pattern" <<< "$output"; then
+    echo "FAIL: wanted status $status and /$pattern/, got $actual:"
+    echo "$output"
+    failed=1
+  fi
+  last_output=$output
+}
+
+# no_line PATTERN: the last in_repo output must not hold that line.
+no_line() {
+  if grep -qE -- "$1" <<< "$last_output"; then
+    echo "FAIL: output holds /$1/:"
+    echo "$last_output"
+    failed=1
+  fi
+}
+
+# An uncommitted change inside big (lines 3 to 9), which stays over the targets.
+new_repo
+sed -i '5s/.*/changed/' "$repo/a.rs"
+baseline 'a.rs big 12 2'
+measurements 'a.rs,big,12,2,3,9'
+in_repo 1 "TOUCHED a.rs::big ccn 12 nesting 2 \(targets: ccn 7, nesting 3\): this change modifies it; bring it within the targets by fixing its cause, or record a flat dispatch with make complexity-update ACCEPT='a.rs::big'"
+
+# The same change, committed.
+git -C "$repo" commit -q -am change
+in_repo 1 'TOUCHED a.rs::big'
+
+# A reviewed flat dispatch is exempt.
+baseline 'a.rs big 12 2 flat'
+in_repo 0 'ok, 1 functions measured'
+
+# Brought within the targets, the entry is stale and nothing is touched.
+baseline 'a.rs big 12 2'
+measurements 'a.rs,big,7,2,3,9'
+in_repo 1 'STALE a.rs: big: baseline entry CCN 12, nesting 2 is now within the targets'
+no_line TOUCHED
+
+# A baseline function in a modified file but outside the changed lines.
+measurements 'a.rs,big,12,2,10,18'
+in_repo 0 'ok'
+
+# A deletion between two lines of a function modifies it; one between two functions does not.
+new_repo
+sed -i '5d' "$repo/a.rs"
+measurements 'a.rs,big,12,2,3,9' 'a.rs,other,9,1,12,18'
+baseline 'a.rs big 12 2' 'a.rs other 9 1'
+in_repo 1 'TOUCHED a.rs::big'
+no_line 'TOUCHED a.rs::other'
+git -C "$repo" checkout -q a.rs
+sed -i '10d' "$repo/a.rs"
+measurements 'a.rs,big,12,2,3,9' 'a.rs,other,9,1,11,18'
+in_repo 0 'ok'
+
+# A renamed file whose functions are unchanged: MOVED, not TOUCHED.
+new_repo
+git -C "$repo" mv a.rs b.rs
+baseline 'a.rs big 12 2'
+measurements 'b.rs,big,12,2,3,9'
+in_repo 1 'MOVED b.rs: big'
+no_line TOUCHED
+
+# --update --accept records the flat marker, and a later --update keeps it.
+new_repo
+sed -i '5s/.*/changed/' "$repo/a.rs"
+baseline 'a.rs big 12 2'
+measurements 'a.rs,big,12,2,3,9'
+in_repo 1 'baseline was not updated' --update
+in_repo 0 'wrote' --update --accept 'a.rs::big'
+grep -qP 'a.rs\tbig\t12\t2\tflat$' "$tmp/baseline" || {
+  echo "FAIL: --accept did not write the flat marker:"; cat "$tmp/baseline"; failed=1; }
+in_repo 0 'ok'
+measurements 'a.rs,big,12,2,3,9' 'a.rs,other,9,1,12,18'
+in_repo 0 'wrote' --update --accept 'a.rs::other'
+in_repo 0 'wrote' --update
+grep -qP 'a.rs\tbig\t12\t2\tflat$' "$tmp/baseline" || {
+  echo "FAIL: a later --update lost the flat marker:"; cat "$tmp/baseline"; failed=1; }
+
+# A flat entry follows its function when the file moves.
+new_repo
+git -C "$repo" mv a.rs b.rs
+baseline 'a.rs big 12 2 flat'
+measurements 'b.rs,big,12,2,3,9'
+in_repo 0 'wrote' --update
+grep -qP 'b.rs\tbig\t12\t2\tflat$' "$tmp/baseline" || {
+  echo "FAIL: the move lost the flat marker:"; cat "$tmp/baseline"; failed=1; }
+
+# A fifth field other than flat is refused.
+baseline 'a.rs big 12 2 other'
+in_repo 1 'expected path, function, ccn and nesting'
+
+# A base ref that cannot be found skips the check with one line and does not fail.
+new_repo
+sed -i '5s/.*/changed/' "$repo/a.rs"
+baseline 'a.rs big 12 2'
+measurements 'a.rs,big,12,2,3,9'
+output=$(cd "$repo" && python3 "$script" "$tmp/baseline" --measurements "$tmp/measured.csv" \
+  --base nosuchref 2>&1)
+status=$?
+if [ "$status" != 0 ] || [ "$(grep -c 'touched check skipped' <<< "$output")" != 1 ] \
+  || ! grep -q 'nosuchref' <<< "$output"; then
+  echo "FAIL: a missing base ref should skip the touched check with one line, got $status:"
+  echo "$output"
+  failed=1
+fi
+
+# A file renamed and edited inside a baseline function in one change: TOUCHED, not a quiet move.
+new_repo
+git -C "$repo" mv a.rs b.rs
+sed -i '5s/.*/changed/' "$repo/b.rs"
+baseline 'a.rs big 12 2'
+measurements 'b.rs,big,12,2,3,9'
+in_repo 1 'TOUCHED b.rs::big'
+baseline 'a.rs big 12 2 flat'
+in_repo 0 'wrote' --update
+grep -qP 'b.rs\tbig\t12\t2\tflat$' "$tmp/baseline" || { echo "FAIL: flat lost"; failed=1; }
+baseline 'a.rs big 12 2'
+in_repo 0 'wrote' --update --accept 'b.rs::big'
+
+# A content line that looks like a file header does not end the file's ranges.
+new_repo
+sed -i '5s/.*/-- x/' "$repo/a.rs"
+git -C "$repo" commit -q -am dashes
+git -C "$repo" branch -f base
+sed -i -e '5s/.*/++ y/' -e '15s/.*/changed/' "$repo/a.rs"
+baseline 'a.rs big 12 2' 'a.rs other 9 1'
+measurements 'a.rs,big,12,2,3,9' 'a.rs,other,9,1,12,18'
+in_repo 1 'TOUCHED a.rs::big'
+if ! grep -q 'TOUCHED a.rs::other' <<< "$last_output"; then
+  echo "FAIL: a content line starting with +++ hid the next hunk:"; echo "$last_output"; failed=1
+fi
+
+# The report names the entries newly marked flat and those no longer flat.
+printf '# old\na.rs\tfmt\t20\t0\na.rs\tbig\t12\t2\tflat\nc.rs\tkept\t9\t1\tflat\nd.rs\tmv\t9\t1\tflat\n' > "$tmp/old"
+baseline 'a.rs fmt 20 0 flat' 'a.rs big 12 2' 'c.rs kept 9 1 flat' 'e.rs mv 9 1 flat'
+output=$(GITHUB_STEP_SUMMARY="$tmp/summary" python3 "$script" "$tmp/baseline" --compare-with "$tmp/old")
+status=$?
+for want in 'marked flat' 'a.rs. .fmt.' 'no longer flat' 'a.rs. .big.'; do
+  if [ "$status" != 0 ] || ! grep -qE -- "$want" <<< "$output"; then
+    echo "FAIL: the report wanted /$want/ and status 0, got $status:"; echo "$output"; failed=1
+  fi
+done
+if grep -qE 'kept|e.rs' <<< "$(grep -E 'flat' <<< "$output")"; then
+  echo "FAIL: an unchanged or moved flat entry was reported:"; echo "$output"; failed=1
+fi
+grep -q 'marked flat' "$tmp/summary" || { echo "FAIL: flat marks missing from the summary"; failed=1; }
 
 if [ "$failed" = 0 ]; then echo "complexity: ok"; fi
 exit "$failed"

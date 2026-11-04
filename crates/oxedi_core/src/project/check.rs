@@ -1,27 +1,14 @@
 //! Element checks: the values a segment's elements parse to, and the diagnostics they raise.
 
-use crate::column::{ColumnType, is_dt, parse_dt, parse_n, parse_r, parse_tm};
 use crate::diagnostic::Rule;
 use crate::element::Element;
 use crate::segment::Segment;
 use crate::spec::{ElementDef, rejects_code};
+use crate::value::{ColumnType, LengthRange, Parsed};
 
 use super::Projector;
 use super::fill::leaf_text;
 use super::plan::ElementPlan;
-/// A value an element check parsed, or a column read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Parsed {
-    /// Absent, empty, or not a valid value of its type.
-    Null,
-    /// Text, to be copied from the segment.
-    Text,
-    Int(i64),
-    Decimal(i128),
-    Date(i32),
-    Time(i32),
-}
-
 /// One defined element (or component) of the current segment, checked.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Checked {
@@ -29,31 +16,8 @@ pub(super) struct Checked {
     pub(super) component: Option<usize>,
     /// The column type its definition maps to.
     pub(super) kind: ColumnType,
-    pub(super) value: Parsed,
-}
-
-/// Whether a non-empty text is a value of the column type, as [`parse`]
-/// decides, without keeping the value: text is always valid and a date skips
-/// the day count.
-fn is_valid(kind: ColumnType, text: &[u8]) -> bool {
-    match kind {
-        ColumnType::Binary => true,
-        ColumnType::Int64 { .. } => parse_n(text).is_some(),
-        ColumnType::Decimal128 { scale, .. } => parse_r(text, scale).is_some(),
-        ColumnType::Date32 => is_dt(text),
-        ColumnType::Time32 => parse_tm(text).is_some(),
-    }
-}
-
-/// A non-empty text as a value of the column type; `None` when it does not parse.
-pub(super) fn parse(kind: ColumnType, text: &[u8]) -> Option<Parsed> {
-    Some(match kind {
-        ColumnType::Binary => Parsed::Text,
-        ColumnType::Int64 { .. } => Parsed::Int(parse_n(text)?),
-        ColumnType::Decimal128 { scale, .. } => Parsed::Decimal(parse_r(text, scale)?),
-        ColumnType::Date32 => Parsed::Date(parse_dt(text)?),
-        ColumnType::Time32 => Parsed::Time(parse_tm(text)?),
-    })
+    /// The parsed value; `None` when missing or of the wrong type.
+    pub(super) value: Option<Parsed>,
 }
 
 impl<'s> Projector<'s> {
@@ -139,9 +103,9 @@ impl<'s> Projector<'s> {
     }
 
     /// Checks one value against its definition, reports what fails, and
-    /// returns the parsed value (null when missing or of the wrong type).
+    /// returns the parsed value (`None` when missing or of the wrong type).
     /// When no column reads it (`keep` false) the value is only validated
-    /// and null is returned; the diagnostics are the same.
+    /// and `None` is returned; the diagnostics are the same.
     fn check_value(
         &mut self,
         segment: &Segment<'_>,
@@ -150,7 +114,7 @@ impl<'s> Projector<'s> {
         def: &ElementDef,
         text: &[u8],
         keep: bool,
-    ) -> Parsed {
+    ) -> Option<Parsed> {
         if text.is_empty() {
             if def.required {
                 self.report(
@@ -166,15 +130,9 @@ impl<'s> Projector<'s> {
                     &[],
                 );
             }
-            return Parsed::Null;
+            return None;
         }
-        let kind = ColumnType::of(Some(def.kind));
-        let value = if keep {
-            parse(kind, text)
-        } else {
-            is_valid(kind, text).then_some(Parsed::Null)
-        };
-        let Some(value) = value else {
+        let Some(value) = ColumnType::of(Some(def.kind)).parse(text) else {
             self.report(
                 Rule::TypeMismatch {
                     segment_id: segment.id.to_vec(),
@@ -188,11 +146,17 @@ impl<'s> Projector<'s> {
                 component,
                 text,
             );
-            return Parsed::Null;
+            return None;
         };
+        let value = keep.then_some(value);
         // Numeric lengths count digits only, as X12 does: no sign, no point.
-        let length = def.kind.length_of(text);
-        if def.min.is_some_and(|min| length < min) || def.max.is_some_and(|max| length > max) {
+        if !def.kind.length_in_range(
+            text,
+            LengthRange {
+                min: def.min,
+                max: def.max,
+            },
+        ) {
             self.report(
                 Rule::LengthOutOfRange {
                     segment_id: segment.id.to_vec(),
@@ -201,7 +165,7 @@ impl<'s> Projector<'s> {
                     name: def.name.clone(),
                     min: def.min,
                     max: def.max,
-                    length,
+                    length: def.kind.length_of(text),
                 },
                 segment.index,
                 element,

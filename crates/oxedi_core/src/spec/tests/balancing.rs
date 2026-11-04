@@ -174,7 +174,7 @@ fn the_shape_of_the_section_is_checked_with_its_key_path() {
         ),
         (
             r#"{"r":{"per":"pay","target":[],"sum":[],"tolerance":0}}"#,
-            "spec: unknown key \"tolerance\" at balancing.r",
+            "spec: unknown key \"tolerance\" at balancing.r; the allowed keys are: per, sum, target",
         ),
         (
             r#"{"r":{"per":"pay","target":{},"sum":[]}}"#,
@@ -299,16 +299,4 @@ fn spec_errors_of_a_rule_display_the_rule_and_do_not_chain_their_source() {
         "balancing rule \"r\" does not match the schema: invalid type: integer `1`, expected a balancing rule object"
     );
     assert!(std::error::Error::source(&schema).is_none());
-}
-
-#[test]
-fn amounts_render_with_their_scale_and_sign() {
-    assert_eq!(render_amount(12345, 2), "123.45");
-    assert_eq!(render_amount(-5, 2), "-0.05");
-    assert_eq!(render_amount(0, 2), "0.00");
-    assert_eq!(render_amount(-120, 0), "-120");
-    assert_eq!(
-        render_amount(i128::MIN, 2),
-        "-1701411834604692317316873037158841057.28"
-    );
 }

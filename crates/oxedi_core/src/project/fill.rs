@@ -1,13 +1,14 @@
 //! Row filling: columns read from captured segments, the rows appended to the
 //! tables, the diagnostic helpers and the text read of an element.
 
-use crate::column::{Cell, CellError, ColumnType, RowError, Table};
+use crate::column::{Cell, CellError, RowError, Table};
 use crate::diagnostic::{Diagnostic, LoopRef, Rule};
 use crate::element::Element;
 use crate::segment::Segment;
 use crate::spec::{ColumnSource, LoopId, Pick};
+use crate::value::{ColumnType, Parsed};
 
-use super::check::{Checked, Parsed, parse};
+use super::check::Checked;
 use super::plan::Watcher;
 use super::{Projector, Row, Slot};
 
@@ -284,8 +285,7 @@ struct Place {
 /// The column value at `at`: the checked value when the definition there
 /// maps to the column's type, otherwise the text parsed as that type (an
 /// element the spec does not define, or a group whose definition differs).
-/// Text is copied into `bytes`; an empty text that is present in the
-/// segment is an empty value, not null.
+/// Text is copied into `bytes`.
 fn read(
     checked: &[Checked],
     segment: &Segment<'_>,
@@ -296,35 +296,37 @@ fn read(
 ) -> Slot {
     let known = checked
         .iter()
-        .find(|c| c.element == at.element && c.component == at.component && c.kind == at.kind);
+        .find(|c| (c.element, c.component, c.kind) == (at.element, at.component, at.kind));
     let value = match known {
         Some(checked) => checked.value,
         None => {
             let text = leaf_text(segment, at.element, at.component, separator, joined);
-            if text.is_empty() {
-                Parsed::Null
-            } else {
-                parse(at.kind, text).unwrap_or(Parsed::Null)
-            }
+            at.kind.parse(text)
         }
     };
     match value {
-        // A text column tells a present but empty value (`""`) from an
-        // absent one (null); other types have no empty value.
-        Parsed::Null if at.kind == ColumnType::Binary && is_present(segment, at) => {
-            Slot::Bytes(bytes.len(), bytes.len())
-        }
-        Parsed::Null => Slot::Null,
-        Parsed::Text => {
+        Some(Parsed::Text) => {
             let text = leaf_text(segment, at.element, at.component, separator, joined);
             let start = bytes.len();
             bytes.extend_from_slice(text);
             Slot::Bytes(start, bytes.len())
         }
-        Parsed::Int(value) => Slot::Int(value),
-        Parsed::Decimal(value) => Slot::Decimal(value),
-        Parsed::Date(value) => Slot::Date(value),
-        Parsed::Time(value) => Slot::Time(value),
+        Some(Parsed::Int(value)) => Slot::Int(value),
+        Some(Parsed::Decimal(value)) => Slot::Decimal(value),
+        Some(Parsed::Date(value)) => Slot::Date(value),
+        Some(Parsed::Time(value)) => Slot::Time(value),
+        None => no_value(segment, at, bytes),
+    }
+}
+
+/// The slot of an element with no value: a text column tells a present but
+/// empty value (`""`) from an absent one (null); other types have no empty
+/// value.
+fn no_value(segment: &Segment<'_>, at: Place, bytes: &[u8]) -> Slot {
+    if at.kind == ColumnType::Binary && is_present(segment, at) {
+        Slot::Bytes(bytes.len(), bytes.len())
+    } else {
+        Slot::Null
     }
 }
 

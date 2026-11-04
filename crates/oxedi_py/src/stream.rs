@@ -7,7 +7,9 @@
 
 use std::sync::{Arc, Mutex, TryLockError};
 
-use oxedi_core::{Delimiters, Diagnostic, Event, LoopId, Mask, Processor, Spec, Tables, Tokenizer};
+use oxedi_core::{
+    Builtin, Delimiters, Diagnostic, Event, LoopId, Mask, Processor, Spec, Tables, Tokenizer,
+};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -188,7 +190,7 @@ pub fn stream(
     let given = spec::given(spec);
     // The loop is checked before the input is read, against the given spec
     // or the default built-in; every built-in has the same loops.
-    loop_of(given.as_deref().unwrap_or(&spec::builtin()), by)?;
+    loop_of(given.as_deref().unwrap_or(&Builtin::fallback().spec), by)?;
     let delimiters = match delimiters {
         Some(delimiters) => delimiters.get().inner,
         None => *Tokenizer::new(&bytes)
@@ -206,13 +208,8 @@ pub fn stream(
     let walk = py.detach(|| {
         Walk::new(source, |source| Pass {
             segments: Tokenizer::with_delimiters(&source.bytes, source.delimiters),
-            processor: {
-                let processor = Processor::new(&source.spec, &source.delimiters);
-                match &source.mask {
-                    Some(mask) => processor.with_mask(mask),
-                    None => processor,
-                }
-            },
+            processor: Processor::new(&source.spec, &source.delimiters)
+                .with_mask(source.mask.as_ref()),
         })
     });
     Ok(PyStream {

@@ -313,3 +313,55 @@ fn is_special_covers_the_delimiters_the_tokenizer_splits_on() {
         "repetition is not split, so it is data"
     );
 }
+
+#[test]
+fn isa_datum_of_not_isa() {
+    let input = b"hello, this is not an interchange";
+    let Err(error) = Delimiters::from_isa(input) else {
+        panic!("the input has no ISA");
+    };
+    assert_eq!(error.datum(input), b"hello, t");
+    assert_eq!(error.skipped(), 0);
+}
+
+#[test]
+fn isa_datum_of_a_truncated_isa_after_a_bom() {
+    let input = b"\xEF\xBB\xBF  ISA*00*";
+    let Err(error) = Delimiters::from_isa_after_leading_trivia(input) else {
+        panic!("the input is a truncated ISA");
+    };
+    assert!(
+        matches!(
+            &error,
+            IsaError::Truncated {
+                byte_order_mark: true,
+                whitespace: 2,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.skipped(), 5);
+    assert_eq!(error.datum(input), b"ISA*00*");
+}
+
+#[test]
+fn isa_datum_of_a_truncated_isa_keeps_at_most_the_nominal_length() {
+    let mut input = b"ISA*".to_vec();
+    input.resize(IsaError::ISA_LEN + 10, b'x');
+    let Err(error) = Delimiters::from_isa(&input) else {
+        panic!("the input has no 16 separators");
+    };
+    assert_eq!(error.datum(&input), &input[..IsaError::ISA_LEN]);
+}
+
+#[test]
+fn isa_datum_of_input_shorter_than_the_skipped_bytes_is_empty() {
+    let error = IsaError::Truncated {
+        len: 0,
+        separators_found: 0,
+        byte_order_mark: true,
+        whitespace: 4,
+    };
+    assert_eq!(error.datum(b"\xEF"), b"");
+}

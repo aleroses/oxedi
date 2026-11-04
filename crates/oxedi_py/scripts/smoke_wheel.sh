@@ -10,8 +10,9 @@ trap 'rm -rf "$work"' EXIT
 
 maturin build --release --manifest-path "$repo/crates/oxedi_py/Cargo.toml" --out "$work/dist"
 python "$repo/crates/oxedi_py/scripts/check_wheel.py" "$(ls "$work"/dist/oxedi-*.whl)" "$repo"
+python "$repo/tools/deps/deps.py" wheel "$(ls "$work"/dist/oxedi-*.whl)"
 uv venv --quiet --python "$(command -v python)" "$work/venv"
-VIRTUAL_ENV="$work/venv" uv pip install --quiet "$work"/dist/oxedi-*.whl pytest polars pyarrow pandas "edi-835-parser==1.8.0" duckdb
+VIRTUAL_ENV="$work/venv" uv pip install --quiet "$work"/dist/oxedi-*.whl --group "$repo/crates/oxedi_py/pyproject.toml:test"
 cp -r "$repo/crates/oxedi_py/tests" "$work/tests"
 
 cd "$work"

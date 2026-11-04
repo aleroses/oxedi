@@ -1,7 +1,7 @@
 use super::super::convert::{
     float_integer, rescale, timestamp_date, unsigned_integer, whole_seconds, wide_integer,
 };
-use super::super::input::Unit;
+use oxedi_core::value::TimeUnit;
 
 #[test]
 fn integers_fit_or_say_why() {
@@ -43,38 +43,55 @@ fn decimals_rescale_exactly() {
         rescale(i128::MAX, 0, 2),
         Err(format!("{} at scale 0 overflows scale 2", i128::MAX))
     );
+    assert_eq!(rescale(0, 0, 39), Ok(0));
+    assert_eq!(
+        rescale(1, 0, 39),
+        Err("1 at scale 0 overflows scale 39".to_owned())
+    );
 }
 
 #[test]
 fn timestamps_must_be_at_midnight() {
-    assert_eq!(timestamp_date(86_400, Unit::Second), Ok(1));
-    assert_eq!(timestamp_date(86_400_000, Unit::Milli), Ok(1));
-    assert_eq!(timestamp_date(-86_400_000_000, Unit::Micro), Ok(-1));
-    assert_eq!(timestamp_date(86_400_000_000_000, Unit::Nano), Ok(1));
+    assert_eq!(timestamp_date(86_400, TimeUnit::Second), Ok(1));
+    assert_eq!(timestamp_date(86_400_000, TimeUnit::Millisecond), Ok(1));
     assert_eq!(
-        timestamp_date(1, Unit::Micro),
+        timestamp_date(-86_400_000_000, TimeUnit::Microsecond),
+        Ok(-1)
+    );
+    assert_eq!(
+        timestamp_date(86_400_000_000_000, TimeUnit::Nanosecond),
+        Ok(1)
+    );
+    assert_eq!(
+        timestamp_date(1, TimeUnit::Microsecond),
         Err("timestamp 1 is not at midnight; give dates".to_owned())
     );
     assert_eq!(
-        timestamp_date(i64::MAX / 86_400 * 86_400, Unit::Second),
+        timestamp_date(i64::MAX / 86_400 * 86_400, TimeUnit::Second),
         Err(format!("{} is out of range", i64::MAX / 86_400 * 86_400))
     );
 }
 
 #[test]
 fn times_must_be_whole_seconds() {
-    assert_eq!(whole_seconds(37_800_000_000, 1_000_000), Ok(37_800));
-    assert_eq!(whole_seconds(37_800_000_000_000, 1_000_000_000), Ok(37_800));
     assert_eq!(
-        whole_seconds(37_800_500_000_000, 1_000_000_000),
+        whole_seconds(37_800_000_000, TimeUnit::Microsecond),
+        Ok(37_800)
+    );
+    assert_eq!(
+        whole_seconds(37_800_000_000_000, TimeUnit::Nanosecond),
+        Ok(37_800)
+    );
+    assert_eq!(
+        whole_seconds(37_800_500_000_000, TimeUnit::Nanosecond),
         Err("37800500000000 is not a whole second".to_owned())
     );
     assert_eq!(
-        whole_seconds(1_500_000, 1_000_000),
+        whole_seconds(1_500_000, TimeUnit::Microsecond),
         Err("1500000 is not a whole second".to_owned())
     );
     assert_eq!(
-        whole_seconds(i64::MAX - i64::MAX % 1_000, 1_000),
+        whole_seconds(i64::MAX - i64::MAX % 1_000, TimeUnit::Millisecond),
         Err(format!("{} is out of range", i64::MAX - i64::MAX % 1_000))
     );
 }

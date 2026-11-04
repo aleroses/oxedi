@@ -1,7 +1,7 @@
 //! The built-in 835 specs `read_835` chooses from, each with the columns of
 //! every table it projects.
 
-use oxedi_core::{ColumnType, Segment, Spec, spec_schema};
+use oxedi_core::{Builtin, ColumnType, Segment, Spec, UnknownVersion, spec_schema};
 
 /// The columns of one projected table, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,25 +15,31 @@ pub struct BuiltinTable {
     pub parents: Vec<Option<String>>,
 }
 
-/// One built-in spec and the schema of its tables.
+/// One built-in spec of the core and the schema of its tables.
 #[derive(Debug)]
-pub struct Builtin {
-    /// The version the spec covers, as `version :=` names it.
-    pub version: &'static str,
-    /// The spec.
-    pub spec: Spec,
+pub struct BuiltinSchema {
+    /// The core's built-in.
+    builtin: &'static Builtin,
     /// Every table the spec projects, in the spec's order.
     pub tables: Vec<BuiltinTable>,
 }
 
-impl Builtin {
-    fn new(version: &'static str, spec: Spec) -> Builtin {
-        let tables = schema_of(&spec);
-        Builtin {
-            version,
-            spec,
-            tables,
+impl BuiltinSchema {
+    fn new(builtin: &'static Builtin) -> BuiltinSchema {
+        BuiltinSchema {
+            builtin,
+            tables: schema_of(&builtin.spec),
         }
+    }
+
+    /// The version the spec covers, as `version :=` names it.
+    pub fn version(&self) -> &'static str {
+        self.builtin.version.text()
+    }
+
+    /// The spec.
+    pub fn spec(&self) -> &Spec {
+        &self.builtin.spec
     }
 
     /// The schema of the table `name`, if the spec projects it.
@@ -66,49 +72,66 @@ fn schema_of(spec: &Spec) -> Vec<BuiltinTable> {
         .collect()
 }
 
-/// Every built-in spec; the first is the default.
+/// The schemas of the core's built-in specs, in the core's order: the first
+/// is the default.
 #[derive(Debug)]
 pub struct Builtins {
-    default: Builtin,
-    others: Vec<Builtin>,
+    schemas: Vec<BuiltinSchema>,
 }
 
 impl Builtins {
-    /// Loads the built-in 5010 (the default) and 4010 specs.
+    /// Describes every built-in the core ships.
     pub fn load() -> Builtins {
         Builtins {
-            default: Builtin::new("5010", Spec::builtin_835()),
-            others: vec![Builtin::new("4010", Spec::builtin_835_4010())],
+            schemas: Builtin::all().iter().map(BuiltinSchema::new).collect(),
         }
     }
 
-    /// The spec used when a file declares no known version.
-    pub fn default(&self) -> &Builtin {
-        &self.default
-    }
-
     /// Every built-in, the default first.
-    pub fn iter(&self) -> impl Iterator<Item = &Builtin> {
-        std::iter::once(&self.default).chain(self.others.iter())
+    #[cfg(test)]
+    pub fn iter(&self) -> impl Iterator<Item = &BuiltinSchema> {
+        self.schemas.iter()
     }
 
-    /// The versions `version :=` accepts.
-    pub fn versions(&self) -> Vec<&'static str> {
-        self.iter().map(|builtin| builtin.version).collect()
+    /// The schema of the core's built-in `builtin`: schemas are kept in the
+    /// registry's order, so the entry sits at the same position.
+    fn of(&self, builtin: &Builtin) -> Option<&BuiltinSchema> {
+        let at = Builtin::all()
+            .iter()
+            .position(|known| std::ptr::eq(known, builtin))?;
+        self.schemas.get(at)
     }
 
-    /// The built-in of `version`.
-    pub fn by_version(&self, version: &str) -> Option<&Builtin> {
-        self.iter().find(|builtin| builtin.version == version)
+    /// The spec used when a file declares no known version: the registry's
+    /// first entry, which `load` described first.
+    pub fn default(&self) -> &BuiltinSchema {
+        &self.schemas[0]
     }
 
-    /// The built-in of the version the segments declare, else the default.
-    pub fn select<'s>(&self, segments: impl IntoIterator<Item = Segment<'s>>) -> &Builtin {
-        let specs: Vec<&Spec> = self.iter().map(|builtin| &builtin.spec).collect();
-        let chosen = Spec::select(&specs, &self.default.spec, segments);
-        self.iter()
-            .find(|builtin| std::ptr::eq(&builtin.spec, chosen))
-            .unwrap_or(&self.default)
+    /// The built-in of `version`; `UnknownVersion` also when the registry
+    /// has an entry this table does not describe.
+    pub fn by_version(&self, version: &str) -> Result<&BuiltinSchema, UnknownVersion> {
+        let transaction = Builtin::fallback().transaction;
+        let found = Builtin::find_text(transaction, version)?;
+        self.of(found).ok_or_else(|| UnknownVersion {
+            transaction: transaction.to_owned(),
+            version: version.to_owned(),
+            known: Vec::new(),
+        })
+    }
+
+    /// The built-in of `version`, the default for `None`.
+    pub fn pick(&self, version: Option<&str>) -> Result<&BuiltinSchema, UnknownVersion> {
+        version.map_or_else(|| Ok(self.default()), |version| self.by_version(version))
+    }
+
+    /// The built-in of the version the segments declare, else the default;
+    /// `None` when the registry has an entry this table does not describe.
+    pub fn select<'s>(
+        &self,
+        segments: impl IntoIterator<Item = Segment<'s>>,
+    ) -> Option<&BuiltinSchema> {
+        self.of(Builtin::select(segments))
     }
 }
 

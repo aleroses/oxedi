@@ -1,12 +1,18 @@
 //! Checks of the JSON shape of a spec before its entries are deserialized.
+//!
+//! The shape is data: every object the schema defines is an [`ObjectSchema`],
+//! a table of its keys and the [`Field`] each holds (the tables are in
+//! `schema`), and one walk checks a value against it. The root is such a
+//! table too, one row per section of the spec, so a section is checked by
+//! looking up its key.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::balance::check_balancing_shape;
 use super::error::SpecError;
 use super::render::{child, render_value};
+use super::schema::ROOT;
 
 /// The members of the object at `key`, in key order; empty when there is none.
 pub(super) fn section<'v>(value: &'v Value, key: &str) -> BTreeMap<&'v str, &'v Value> {
@@ -100,83 +106,111 @@ pub(super) fn check_leaf(value: &Value, at: &str, kind: Leaf) -> Result<(), Spec
     }
 }
 
-/// Requires the member `key` of `map`, when present, to be of the `kind`;
-/// `null` also passes when `nullable`.
-pub(super) fn check_member(
-    map: &serde_json::Map<String, Value>,
-    at: &str,
-    key: &str,
-    kind: Leaf,
-    nullable: bool,
-) -> Result<(), SpecError> {
-    match map.get(key) {
-        None => Ok(()),
-        Some(Value::Null) if nullable => Ok(()),
-        Some(value) => check_leaf(value, &child(at, key), kind),
-    }
+/// What a key of an object holds.
+#[derive(Clone, Copy)]
+pub(super) enum Field {
+    /// A scalar of the kind; `null` passes too when `nullable`.
+    Leaf { kind: Leaf, nullable: bool },
+    /// An array whose every item is the field; `expected` describes the
+    /// array in the error when the value is not one.
+    List {
+        item: &'static Field,
+        expected: &'static str,
+    },
+    /// An object whose every member, whatever its key, is the field.
+    Map(&'static Field),
+    /// An object of the schema.
+    Object(&'static ObjectSchema),
 }
 
-/// Requires the member `key` of `map`, when present, to be an object whose
-/// values are all of the `kind`.
-fn check_member_map(
-    map: &serde_json::Map<String, Value>,
-    at: &str,
-    key: &str,
-    kind: Leaf,
-) -> Result<(), SpecError> {
-    if let Some(members) = map.get(key) {
-        let at = child(at, key);
-        for (name, value) in object_at(members, &at)? {
-            check_leaf(value, &child(&at, name), kind)?;
+/// The keys an object may hold, in the order their values are checked, and
+/// the keys it must hold.
+pub(super) struct ObjectSchema {
+    pub(super) keys: &'static [(&'static str, Field)],
+    pub(super) required: &'static [&'static str],
+}
+
+impl Field {
+    /// Requires `value`, found at `at`, to be what the field describes.
+    fn check(self, value: &Value, at: &str) -> Result<(), SpecError> {
+        match self {
+            Field::Leaf { nullable: true, .. } if value.is_null() => Ok(()),
+            Field::Leaf { kind, .. } => check_leaf(value, at, kind),
+            Field::List { item, expected } => check_list(value, at, item, expected),
+            Field::Map(item) => check_map(value, at, item),
+            Field::Object(schema) => schema.check(value, at),
         }
     }
-    Ok(())
 }
 
-/// Requires the member `key` of `map`, when present, to be an array of strings.
-fn check_member_texts(
-    map: &serde_json::Map<String, Value>,
+/// Requires an array whose every item is `item`.
+fn check_list(
+    value: &Value,
     at: &str,
-    key: &str,
+    item: &Field,
+    expected: &'static str,
 ) -> Result<(), SpecError> {
-    let Some(list) = map.get(key) else {
-        return Ok(());
-    };
-    let at = child(at, key);
-    let Value::Array(items) = list else {
+    let Value::Array(items) = value else {
         return Err(SpecError::WrongType {
-            path: at,
-            expected: "an array of strings",
-            found: kind_of(list),
-            value: render_value(list),
+            path: at.to_string(),
+            expected,
+            found: kind_of(value),
+            value: render_value(value),
         });
     };
-    for (i, item) in items.iter().enumerate() {
-        check_leaf(item, &format!("{at}[{i}]"), Leaf::Text)?;
-    }
-    Ok(())
+    items
+        .iter()
+        .enumerate()
+        .try_for_each(|(i, value)| item.check(value, &format!("{at}[{i}]")))
 }
 
-/// Requires every key of `map` to be one of `known`, then every key of
-/// `required` to be present; the first unknown key in key order fails first.
-pub(super) fn check_keys(
-    map: &serde_json::Map<String, Value>,
-    at: &str,
-    known: &[&str],
-    required: &[&'static str],
-) -> Result<(), SpecError> {
-    if let Some(key) = map.keys().find(|key| !known.contains(&key.as_str())) {
-        return Err(SpecError::UnknownKey {
-            path: at.to_string(),
-            key: key.clone(),
-        });
+/// Requires an object whose every member is `item`.
+fn check_map(value: &Value, at: &str, item: &Field) -> Result<(), SpecError> {
+    object_at(value, at)?
+        .iter()
+        .try_for_each(|(key, value)| item.check(value, &child(at, key)))
+}
+
+impl ObjectSchema {
+    /// Requires an object with only the keys of the schema, every key it
+    /// requires, and each value of the field its key holds.
+    fn check(&self, value: &Value, at: &str) -> Result<(), SpecError> {
+        let map = object_at(value, at)?;
+        self.check_keys(map, at)?;
+        self.keys
+            .iter()
+            .filter_map(|(key, field)| map.get(*key).map(|value| (key, field, value)))
+            .try_for_each(|(key, field, value)| field.check(value, &child(at, key)))
     }
-    match required.iter().find(|key| !map.contains_key(**key)) {
-        Some(key) => Err(SpecError::MissingKey {
-            path: at.to_string(),
-            key,
-        }),
-        None => Ok(()),
+
+    /// Requires every key of `map` to be in the schema, then every required
+    /// key to be present; the first unknown key in key order fails first.
+    fn check_keys(&self, map: &serde_json::Map<String, Value>, at: &str) -> Result<(), SpecError> {
+        if let Some(key) = map.keys().find(|key| !self.knows(key)) {
+            return Err(SpecError::UnknownKey {
+                path: at.to_string(),
+                key: key.clone(),
+                allowed: self.names(),
+            });
+        }
+        match self.required.iter().find(|key| !map.contains_key(**key)) {
+            Some(key) => Err(SpecError::MissingKey {
+                path: at.to_string(),
+                key,
+            }),
+            None => Ok(()),
+        }
+    }
+
+    fn knows(&self, key: &str) -> bool {
+        self.keys.iter().any(|(known, _)| *known == key)
+    }
+
+    /// The keys of the schema, in alphabetical order.
+    fn names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self.keys.iter().map(|(key, _)| *key).collect();
+        names.sort_unstable();
+        names
     }
 }
 
@@ -186,217 +220,5 @@ pub(super) fn check_keys(
 /// array in place of a struct, and its messages name neither the key path
 /// nor, for objects, that an object was expected.
 pub(super) fn check_shape(source: &Value) -> Result<(), SpecError> {
-    let root = object_at(source, "")?;
-    check_keys(
-        root,
-        "",
-        &[
-            "name",
-            "loops",
-            "segments",
-            "tables",
-            "balancing",
-            "version",
-        ],
-        &["name", "loops"],
-    )?;
-    check_member(root, "", "name", Leaf::Text, false)?;
-    if let Some(version) = root.get("version") {
-        let keys = ["segment", "element", "values"];
-        let version = object_at(version, "version")?;
-        check_keys(version, "version", &keys, &keys)?;
-        check_member(version, "version", "segment", Leaf::Text, false)?;
-        check_member(version, "version", "element", Leaf::Count, false)?;
-        check_member_texts(version, "version", "values")?;
-    }
-    if let Some(loops) = root.get("loops") {
-        for (name, def) in object_at(loops, "loops")? {
-            let at = child("loops", name);
-            let def = object_at(def, &at)?;
-            check_keys(
-                def,
-                &at,
-                &[
-                    "parent",
-                    "trigger",
-                    "occurrences",
-                    "max",
-                    "usage",
-                    "end",
-                    "control",
-                ],
-                &["trigger"],
-            )?;
-            check_member(def, &at, "parent", Leaf::Text, true)?;
-            check_member(def, &at, "end", Leaf::Text, true)?;
-            check_member(def, &at, "max", Leaf::Count, true)?;
-            check_member(def, &at, "usage", Leaf::Text, true)?;
-            if let Some(occurrences) = def.get("occurrences") {
-                check_occurrences_shape(occurrences, &child(&at, "occurrences"))?;
-            }
-            if let Some(trigger) = def.get("trigger") {
-                let at = child(&at, "trigger");
-                let trigger = object_at(trigger, &at)?;
-                check_keys(trigger, &at, &["segment", "where"], &["segment"])?;
-                check_member(trigger, &at, "segment", Leaf::Text, false)?;
-                check_member_map(trigger, &at, "where", Leaf::Text)?;
-            }
-            if let Some(control) = def.get("control") {
-                let at = child(&at, "control");
-                let control = object_at(control, &at)?;
-                let keys = ["opener_element", "closer_element", "count_element", "count"];
-                check_keys(control, &at, &keys, &keys)?;
-                for key in ["opener_element", "closer_element", "count_element"] {
-                    check_member(control, &at, key, Leaf::Count, false)?;
-                }
-                check_member(control, &at, "count", Leaf::Text, false)?;
-            }
-        }
-    }
-    if let Some(tables) = root.get("tables") {
-        for (name, def) in object_at(tables, "tables")? {
-            let at = child("tables", name);
-            let def = object_at(def, &at)?;
-            check_keys(
-                def,
-                &at,
-                &["loops", "ref", "segment", "repeat", "columns", "phi_seed"],
-                &["loops"],
-            )?;
-            check_member_texts(def, &at, "loops")?;
-            check_member(def, &at, "ref", Leaf::Text, true)?;
-            check_member(def, &at, "segment", Leaf::Text, true)?;
-            check_member(def, &at, "phi_seed", Leaf::Text, true)?;
-            if let Some(repeat) = def.get("repeat") {
-                let at = child(&at, "repeat");
-                let repeat = object_at(repeat, &at)?;
-                check_keys(repeat, &at, &["from", "step"], &["from", "step"])?;
-                check_member(repeat, &at, "from", Leaf::Count, false)?;
-                check_member(repeat, &at, "step", Leaf::Count, false)?;
-            }
-            if let Some(columns) = def.get("columns") {
-                let at = child(&at, "columns");
-                for (column, def) in object_at(columns, &at)? {
-                    let at = child(&at, column);
-                    let def = object_at(def, &at)?;
-                    check_keys(
-                        def,
-                        &at,
-                        &[
-                            "loop",
-                            "segment",
-                            "where",
-                            "occurrence",
-                            "pick",
-                            "element",
-                            "component",
-                            "group_element",
-                            "segment_index",
-                            "phi",
-                        ],
-                        &[],
-                    )?;
-                    check_member(def, &at, "loop", Leaf::Text, true)?;
-                    check_member(def, &at, "segment", Leaf::Text, true)?;
-                    check_member_map(def, &at, "where", Leaf::Text)?;
-                    check_member(def, &at, "occurrence", Leaf::Text, true)?;
-                    check_member(def, &at, "pick", Leaf::Pick, true)?;
-                    for key in ["element", "component", "group_element"] {
-                        check_member(def, &at, key, Leaf::Count, true)?;
-                    }
-                    check_member(def, &at, "segment_index", Leaf::Flag, false)?;
-                    check_member(def, &at, "phi", Leaf::Text, true)?;
-                }
-            }
-        }
-    }
-    if let Some(balancing) = root.get("balancing") {
-        check_balancing_shape(balancing)?;
-    }
-    if let Some(segments) = root.get("segments") {
-        for (id, def) in object_at(segments, "segments")? {
-            let at = child("segments", id);
-            let def = object_at(def, &at)?;
-            check_keys(def, &at, &["elements"], &[])?;
-            if let Some(elements) = def.get("elements") {
-                check_elements_shape(elements, &child(&at, "elements"))?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Requires every occurrence of a loop to be an object with the keys and
-/// scalar kinds the schema defines.
-fn check_occurrences_shape(occurrences: &Value, at: &str) -> Result<(), SpecError> {
-    for (name, def) in object_at(occurrences, at)? {
-        let at = child(at, name);
-        let def = object_at(def, &at)?;
-        check_keys(
-            def,
-            &at,
-            &["segment", "pos", "usage", "max", "qualifier", "codes"],
-            &["segment", "pos"],
-        )?;
-        check_member(def, &at, "segment", Leaf::Text, false)?;
-        check_member(def, &at, "pos", Leaf::Count, false)?;
-        check_member(def, &at, "usage", Leaf::Text, true)?;
-        check_member(def, &at, "max", Leaf::Count, true)?;
-        if let Some(qualifier) = def.get("qualifier") {
-            let at = child(&at, "qualifier");
-            let qualifier = object_at(qualifier, &at)?;
-            check_keys(
-                qualifier,
-                &at,
-                &["element", "component", "codes"],
-                &["element", "codes"],
-            )?;
-            check_member(qualifier, &at, "element", Leaf::Count, false)?;
-            check_member(qualifier, &at, "component", Leaf::Count, true)?;
-            check_member_texts(qualifier, &at, "codes")?;
-        }
-        if let Some(codes) = def.get("codes") {
-            let at = child(&at, "codes");
-            let lists = object_at(codes, &at)?;
-            for key in lists.keys() {
-                check_member_texts(lists, &at, key)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Requires every element (and every component) definition to be an object
-/// whose scalar members are of the kind the schema expects.
-fn check_elements_shape(elements: &Value, at: &str) -> Result<(), SpecError> {
-    for (position, def) in object_at(elements, at)? {
-        let at = child(at, position);
-        let def = object_at(def, &at)?;
-        check_keys(
-            def,
-            &at,
-            &[
-                "name",
-                "type",
-                "required",
-                "min",
-                "max",
-                "scale",
-                "codes",
-                "composite",
-            ],
-            &["name", "type"],
-        )?;
-        check_member_texts(def, &at, "codes")?;
-        check_member(def, &at, "name", Leaf::Text, false)?;
-        check_member(def, &at, "type", Leaf::Text, false)?;
-        check_member(def, &at, "required", Leaf::Flag, false)?;
-        check_member(def, &at, "min", Leaf::Count, true)?;
-        check_member(def, &at, "max", Leaf::Count, true)?;
-        check_member(def, &at, "scale", Leaf::Byte, true)?;
-        if let Some(composite) = def.get("composite") {
-            check_elements_shape(composite, &child(&at, "composite"))?;
-        }
-    }
-    Ok(())
+    ROOT.check(source, "")
 }

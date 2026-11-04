@@ -17,9 +17,13 @@ use arrow_array::types::{
     Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use arrow_array::{Array, RecordBatch, RecordBatchReader};
+use arrow_array::{Array, ArrowPrimitiveType, RecordBatch, RecordBatchReader};
 use arrow_schema::{DataType, TimeUnit};
 use oxedi_core::project::table_columns;
+use oxedi_core::value::{
+    TimeUnit as Unit, date_from_midnight, date_from_millis, integer_from_f64, integer_from_u128,
+    rescale, seconds_from,
+};
 use oxedi_core::{Cell, ColumnType, Spec, Table, Tables};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyCapsuleMethods, PyMapping};
@@ -196,145 +200,119 @@ fn bytes(array: &dyn Array, row: usize) -> Option<&[u8]> {
     })
 }
 
+/// The value at `row` of an array of primitive type `T`; `None` when the
+/// array is of another type.
+fn primitive<T: ArrowPrimitiveType>(array: &dyn Array, row: usize) -> Option<T::Native> {
+    Some(array.as_primitive_opt::<T>()?.value(row))
+}
+
+/// A signed integer of any width; `None` for another type.
+fn signed(array: &dyn Array, row: usize) -> Option<i64> {
+    match array.data_type() {
+        DataType::Int8 => primitive::<Int8Type>(array, row).map(i64::from),
+        DataType::Int16 => primitive::<Int16Type>(array, row).map(i64::from),
+        DataType::Int32 => primitive::<Int32Type>(array, row).map(i64::from),
+        DataType::Int64 => primitive::<Int64Type>(array, row),
+        _ => None,
+    }
+}
+
+/// An unsigned integer of any width; `None` for another type.
+fn unsigned(array: &dyn Array, row: usize) -> Option<u64> {
+    match array.data_type() {
+        DataType::UInt8 => primitive::<UInt8Type>(array, row).map(u64::from),
+        DataType::UInt16 => primitive::<UInt16Type>(array, row).map(u64::from),
+        DataType::UInt32 => primitive::<UInt32Type>(array, row).map(u64::from),
+        DataType::UInt64 => primitive::<UInt64Type>(array, row),
+        _ => None,
+    }
+}
+
+/// A float of either width; `None` for another type.
+fn float(array: &dyn Array, row: usize) -> Option<f64> {
+    match array.data_type() {
+        DataType::Float32 => primitive::<Float32Type>(array, row).map(f64::from),
+        DataType::Float64 => primitive::<Float64Type>(array, row),
+        _ => None,
+    }
+}
+
 /// An integer of any width, or a float with no fraction; `None` for another
 /// type, the reason for a value that does not fit.
 fn integer(array: &dyn Array, row: usize) -> Option<Result<i64, String>> {
-    let wide = |value: i128| {
-        i64::try_from(value).map_err(|_| format!("{value} does not fit a 64-bit integer"))
-    };
-    let float = |value: f64| {
-        if value.is_finite() && value.fract() == 0.0 && value.abs() < 9.2e18 {
-            Ok(value as i64)
-        } else {
-            Err(format!("{value} is not a whole number"))
-        }
-    };
-    Some(match array.data_type() {
-        DataType::Int8 => Ok(i64::from(array.as_primitive_opt::<Int8Type>()?.value(row))),
-        DataType::Int16 => Ok(i64::from(array.as_primitive_opt::<Int16Type>()?.value(row))),
-        DataType::Int32 => Ok(i64::from(array.as_primitive_opt::<Int32Type>()?.value(row))),
-        DataType::Int64 => Ok(array.as_primitive_opt::<Int64Type>()?.value(row)),
-        DataType::UInt8 => Ok(i64::from(array.as_primitive_opt::<UInt8Type>()?.value(row))),
-        DataType::UInt16 => Ok(i64::from(
-            array.as_primitive_opt::<UInt16Type>()?.value(row),
-        )),
-        DataType::UInt32 => Ok(i64::from(
-            array.as_primitive_opt::<UInt32Type>()?.value(row),
-        )),
-        DataType::UInt64 => wide(i128::from(
-            array.as_primitive_opt::<UInt64Type>()?.value(row),
-        )),
-        DataType::Float32 => float(f64::from(
-            array.as_primitive_opt::<Float32Type>()?.value(row),
-        )),
-        DataType::Float64 => float(array.as_primitive_opt::<Float64Type>()?.value(row)),
-        _ => return None,
-    })
+    signed(array, row)
+        .map(Ok)
+        .or_else(|| unsigned(array, row).map(|value| integer_from_u128(u128::from(value))))
+        .or_else(|| float(array, row).map(integer_from_f64))
+        .map(|converted| converted.map_err(|error| error.to_string()))
 }
 
 /// A decimal rescaled to `scale`, or an integer scaled up; `None` for
 /// another type, the reason for a value that does not rescale exactly.
 fn decimal(array: &dyn Array, row: usize, scale: u8) -> Option<Result<i128, String>> {
-    let (value, from) = match array.data_type() {
-        DataType::Decimal128(_, from) => (
-            array.as_primitive_opt::<Decimal128Type>()?.value(row),
-            i32::from(*from),
-        ),
-        _ => match integer(array, row)? {
-            Ok(value) => (i128::from(value), 0),
-            Err(reason) => return Some(Err(reason)),
-        },
-    };
-    let shift = i32::from(scale) - from;
-    let factor = 10i128.checked_pow(shift.unsigned_abs());
-    Some(match factor {
-        _ if shift >= 0 && value == 0 => Ok(0),
-        _ if shift >= 0 => factor
-            .and_then(|factor| value.checked_mul(factor))
-            .ok_or_else(|| format!("{value} at scale {from} overflows scale {scale}")),
-        Some(factor) if value % factor == 0 => Ok(value / factor),
-        _ => Err(format!(
-            "{value} at scale {from} has more decimals than the column's scale {scale}"
-        )),
-    })
+    let rescaled =
+        |value: i128, from: i32| rescale(value, from, scale).map_err(|error| error.to_string());
+    if let DataType::Decimal128(_, from) = array.data_type() {
+        let value = primitive::<Decimal128Type>(array, row)?;
+        return Some(rescaled(value, i32::from(*from)));
+    }
+    Some(integer(array, row)?.and_then(|value| rescaled(i128::from(value), 0)))
+}
+
+/// The value at `row` of an array of type `T`, with the `unit` it is
+/// counted in; `None` for another type.
+fn ticks<T>(array: &dyn Array, row: usize, unit: Unit) -> Option<(i64, Unit)>
+where
+    T: ArrowPrimitiveType,
+    T::Native: Into<i64>,
+{
+    Some((primitive::<T>(array, row)?.into(), unit))
+}
+
+/// A timestamp's value and the core unit of its Arrow unit.
+fn timestamp(array: &dyn Array, row: usize, unit: TimeUnit) -> Option<(i64, Unit)> {
+    match unit {
+        TimeUnit::Second => ticks::<TimestampSecondType>(array, row, Unit::Second),
+        TimeUnit::Millisecond => ticks::<TimestampMillisecondType>(array, row, Unit::Millisecond),
+        TimeUnit::Microsecond => ticks::<TimestampMicrosecondType>(array, row, Unit::Microsecond),
+        TimeUnit::Nanosecond => ticks::<TimestampNanosecondType>(array, row, Unit::Nanosecond),
+    }
 }
 
 /// Days since 1970-01-01 from a date, or from a timestamp without a time
 /// zone at exactly midnight; `None` for another type.
 fn date(array: &dyn Array, row: usize) -> Option<Result<i32, String>> {
-    const DAY: i64 = 86_400_000;
-    let midnight = |value: i64, per_day: i64| {
-        if value % per_day == 0 {
-            i32::try_from(value / per_day).map_err(|_| format!("{value} is out of range"))
-        } else {
-            Err(format!("timestamp {value} is not at midnight; give dates"))
-        }
-    };
-    Some(match array.data_type() {
+    let converted = match array.data_type() {
         DataType::Timestamp(unit, None) => {
-            let per_day = match unit {
-                TimeUnit::Second => 86_400,
-                TimeUnit::Millisecond => DAY,
-                TimeUnit::Microsecond => DAY * 1_000,
-                TimeUnit::Nanosecond => DAY * 1_000_000,
-            };
-            let value = match unit {
-                TimeUnit::Second => array.as_primitive_opt::<TimestampSecondType>()?.value(row),
-                TimeUnit::Millisecond => array
-                    .as_primitive_opt::<TimestampMillisecondType>()?
-                    .value(row),
-                TimeUnit::Microsecond => array
-                    .as_primitive_opt::<TimestampMicrosecondType>()?
-                    .value(row),
-                TimeUnit::Nanosecond => array
-                    .as_primitive_opt::<TimestampNanosecondType>()?
-                    .value(row),
-            };
-            midnight(value, per_day)
+            let (value, unit) = timestamp(array, row, *unit)?;
+            date_from_midnight(value, unit)
         }
-        DataType::Date32 => Ok(array.as_primitive_opt::<Date32Type>()?.value(row)),
-        DataType::Date64 => {
-            let millis = array.as_primitive_opt::<Date64Type>()?.value(row);
-            if millis % DAY == 0 {
-                i32::try_from(millis / DAY).map_err(|_| format!("{millis} ms is out of range"))
-            } else {
-                Err(format!("{millis} ms is not a whole day"))
-            }
-        }
+        DataType::Date32 => Ok(primitive::<Date32Type>(array, row)?),
+        DataType::Date64 => date_from_millis(primitive::<Date64Type>(array, row)?),
         _ => return None,
-    })
+    };
+    Some(converted.map_err(|error| error.to_string()))
+}
+
+/// A time's value and the core unit of its Arrow unit.
+fn time_ticks(array: &dyn Array, row: usize) -> Option<(i64, Unit)> {
+    match array.data_type() {
+        DataType::Time32(TimeUnit::Second) => ticks::<Time32SecondType>(array, row, Unit::Second),
+        DataType::Time32(TimeUnit::Millisecond) => {
+            ticks::<Time32MillisecondType>(array, row, Unit::Millisecond)
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            ticks::<Time64MicrosecondType>(array, row, Unit::Microsecond)
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            ticks::<Time64NanosecondType>(array, row, Unit::Nanosecond)
+        }
+        _ => None,
+    }
 }
 
 /// Seconds since midnight from a time; `None` for another type.
 fn time(array: &dyn Array, row: usize) -> Option<Result<i32, String>> {
-    let (value, per_second) = match array.data_type() {
-        DataType::Time32(TimeUnit::Second) => (
-            i64::from(array.as_primitive_opt::<Time32SecondType>()?.value(row)),
-            1,
-        ),
-        DataType::Time32(TimeUnit::Millisecond) => (
-            i64::from(
-                array
-                    .as_primitive_opt::<Time32MillisecondType>()?
-                    .value(row),
-            ),
-            1_000,
-        ),
-        DataType::Time64(TimeUnit::Microsecond) => (
-            array
-                .as_primitive_opt::<Time64MicrosecondType>()?
-                .value(row),
-            1_000_000,
-        ),
-        DataType::Time64(TimeUnit::Nanosecond) => (
-            array.as_primitive_opt::<Time64NanosecondType>()?.value(row),
-            1_000_000_000,
-        ),
-        _ => return None,
-    };
-    Some(if value % per_second == 0 {
-        i32::try_from(value / per_second).map_err(|_| format!("{value} is out of range"))
-    } else {
-        Err(format!("{value} is not a whole second"))
-    })
+    let (value, unit) = time_ticks(array, row)?;
+    Some(seconds_from(value, unit).map_err(|error| error.to_string()))
 }

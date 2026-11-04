@@ -43,21 +43,21 @@ fn an_unknown_key_is_rejected_with_its_key_path() {
     let cases = [
         (
             r#"{"name":"t","loops":{"a":{"trigger":{"segment":"AA"}}},"tabels":{}}"#.to_string(),
-            "spec: unknown key \"tabels\" at the top level",
+            "spec: unknown key \"tabels\" at the top level; the allowed keys are: balancing, default_table, loops, name, segments, summaries, tables, version",
         ),
         (
             loop_json(r#"{"trigger":{"segment":"AA"},"typo":1}"#),
-            "spec: unknown key \"typo\" at loops.env",
+            "spec: unknown key \"typo\" at loops.env; the allowed keys are: control, end, max, occurrences, parent, trigger, usage",
         ),
         (
             loop_json(r#"{"trigger":{"segment":"AA","wher":{}}}"#),
-            "spec: unknown key \"wher\" at loops.env.trigger",
+            "spec: unknown key \"wher\" at loops.env.trigger; the allowed keys are: segment, where",
         ),
         (
             loop_json(
                 r#"{"trigger":{"segment":"HD"},"end":"TR","control":{"opener_element":2,"closer_element":2,"count_element":1,"count":"segments","extra":0}}"#,
             ),
-            "spec: unknown key \"extra\" at loops.env.control",
+            "spec: unknown key \"extra\" at loops.env.control; the allowed keys are: closer_element, count, count_element, opener_element",
         ),
     ];
     for (json, expected) in cases {

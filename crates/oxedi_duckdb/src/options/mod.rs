@@ -8,9 +8,6 @@ use oxedi_core::{DateMode, Mask};
 use crate::error::ReadError;
 use crate::value::Value;
 
-/// The table read when `table_name` is not given.
-pub const DEFAULT_TABLE: &str = "claims";
-
 /// The named parameters, in registration order, with whether each is a
 /// boolean (else a VARCHAR).
 pub const NAMED: [(&str, bool); 7] = [
@@ -29,7 +26,7 @@ pub struct Options {
     /// The paths as given: plain paths or glob patterns.
     pub paths: Vec<String>,
     /// The table to return.
-    pub table_name: String,
+    pub table_name: TableChoice,
     /// Whether to add a `filename` column.
     pub filename: bool,
     /// The forced spec version, if any.
@@ -40,6 +37,15 @@ pub struct Options {
     pub ignore_errors: bool,
     /// The mask that hides patient data, when `mask_key` was given.
     pub mask: Option<Mask>,
+}
+
+/// Which table `read_835` returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableChoice {
+    /// `table_name` was not given: the default table of the chosen spec.
+    SpecDefault,
+    /// The table `table_name` names.
+    Named(String),
 }
 
 /// A named parameter as the call gave it.
@@ -61,44 +67,85 @@ impl Options {
     /// callback of a function registered with one positional parameter and
     /// the named parameters of [`NAMED`].
     pub unsafe fn of_bind(info: ffi::duckdb_bind_info) -> Result<Options, ReadError> {
-        // SAFETY: index 0 is the one positional parameter (caller
-        // contract); the value is owned by the caller and taken by `owned`.
-        let path = unsafe { Value::owned(ffi::duckdb_bind_get_parameter(info, 0)) };
-        let paths = match path {
-            Some(path) => paths_of(&path)?,
-            None => return Err(ReadError::NullPath { position: None }),
-        };
-        // SAFETY: each name below is one of NAMED (caller contract).
-        let named = |name: &str| unsafe { named(info, name) };
-        let text = |name: &'static str, parameter: Named| match parameter {
+        let bind = Bind { info };
+        let paths = bind.paths()?;
+        let table_name = bind
+            .text("table_name")?
+            .map_or(TableChoice::SpecDefault, TableChoice::Named);
+        let [filename, binary, ignore_errors] =
+            bind.flags(["filename", "binary", "ignore_errors"])?;
+        Ok(Options {
+            paths,
+            table_name,
+            filename,
+            version: bind.version()?,
+            binary,
+            ignore_errors,
+            mask: bind.mask()?,
+        })
+    }
+}
+
+/// The bind in progress, read one parameter at a time.
+struct Bind {
+    /// The bind info of a running bind of a function registered with one
+    /// positional parameter and the named parameters of [`NAMED`]; the
+    /// contract of [`Options::of_bind`].
+    info: ffi::duckdb_bind_info,
+}
+
+impl Bind {
+    fn named(&self, name: &str) -> Named {
+        // SAFETY: `info` is a live bind info and every name read is one of
+        // NAMED (the contract of `Options::of_bind`).
+        unsafe { named(self.info, name) }
+    }
+
+    /// The paths of the one positional parameter.
+    fn paths(&self) -> Result<Vec<String>, ReadError> {
+        // SAFETY: index 0 is the one positional parameter (the contract of
+        // `Options::of_bind`); the value is owned by the caller and taken by
+        // `owned`.
+        let path = unsafe { Value::owned(ffi::duckdb_bind_get_parameter(self.info, 0)) };
+        match path {
+            Some(path) => paths_of(&path),
+            None => Err(ReadError::NullPath { position: None }),
+        }
+    }
+
+    /// A text parameter: `None` when not given, refused when NULL.
+    fn text(&self, name: &'static str) -> Result<Option<String>, ReadError> {
+        match self.named(name) {
             Named::Absent => Ok(None),
             Named::Null => Err(ReadError::NullOption { name }),
             Named::Given(value) => constant(name, value.text()).map(Some),
-        };
-        let flag = |name: &'static str| match named(name) {
-            Named::Absent => Ok(false),
-            Named::Null => Err(ReadError::NullOption { name }),
-            Named::Given(value) => Ok(value.boolean()),
-        };
-        Ok(Options {
-            paths,
-            table_name: match named("table_name") {
-                Named::Absent => DEFAULT_TABLE.to_owned(),
-                Named::Null => return Err(ReadError::NullOption { name: "table_name" }),
-                Named::Given(value) => constant("table_name", value.text())?,
-            },
-            filename: flag("filename")?,
-            version: match named("version") {
-                Named::Absent | Named::Null => None,
-                Named::Given(value) => Some(constant("version", value.text())?),
-            },
-            binary: flag("binary")?,
-            ignore_errors: flag("ignore_errors")?,
-            mask: mask_of(
-                text("mask_key", named("mask_key"))?,
-                text("mask_dates", named("mask_dates"))?,
-            )?,
-        })
+        }
+    }
+
+    /// The `version`: not given and NULL both leave the choice to the file.
+    fn version(&self) -> Result<Option<String>, ReadError> {
+        match self.named("version") {
+            Named::Absent | Named::Null => Ok(None),
+            Named::Given(value) => constant("version", value.text()).map(Some),
+        }
+    }
+
+    /// The mask `mask_key` and `mask_dates` ask for.
+    fn mask(&self) -> Result<Option<Mask>, ReadError> {
+        mask_of(self.text("mask_key")?, self.text("mask_dates")?)
+    }
+
+    /// Boolean parameters, `false` when not given, refused when NULL.
+    fn flags<const N: usize>(&self, names: [&'static str; N]) -> Result<[bool; N], ReadError> {
+        let mut flags = [false; N];
+        for (flag, name) in flags.iter_mut().zip(names) {
+            *flag = match self.named(name) {
+                Named::Absent => false,
+                Named::Null => return Err(ReadError::NullOption { name }),
+                Named::Given(value) => value.boolean(),
+            };
+        }
+        Ok(flags)
     }
 }
 

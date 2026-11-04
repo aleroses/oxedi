@@ -22,6 +22,9 @@ pub(super) struct RawSpec {
     pub(super) _tables: BTreeMap<String, IgnoredAny>,
     #[serde(default, rename = "balancing")]
     pub(super) _balancing: BTreeMap<String, IgnoredAny>,
+    #[serde(default, rename = "summaries")]
+    pub(super) _summaries: BTreeMap<String, IgnoredAny>,
+    pub(super) default_table: Option<String>,
     pub(super) version: Option<RawVersion>,
 }
 
@@ -182,4 +185,42 @@ pub(super) struct RawTerm {
     pub(super) elements: Vec<usize>,
     pub(super) component: Option<usize>,
     pub(super) sign: Option<String>,
+}
+
+// A summary holds exactly one operation; which ones it holds is checked when
+// it compiles, so the error can list them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "a summary object")]
+pub(super) struct RawSummary {
+    pub(super) count: Option<RawSummaryTable>,
+    pub(super) distinct: Option<RawSummaryColumn>,
+    pub(super) sum: Option<RawSummaryColumn>,
+    pub(super) row: Option<RawSummaryRow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "a summary operation object")]
+pub(super) struct RawSummaryTable {
+    pub(super) table: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "a summary operation object")]
+pub(super) struct RawSummaryColumn {
+    pub(super) table: String,
+    pub(super) column: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "a summary operation object")]
+pub(super) struct RawSummaryRow {
+    pub(super) table: String,
+    pub(super) fields: Vec<RawSummaryField>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "a summary field object")]
+pub(super) struct RawSummaryField {
+    pub(super) name: String,
+    pub(super) column: String,
 }

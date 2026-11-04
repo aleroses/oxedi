@@ -8,7 +8,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[4]
 SPECS = REPO / "crates" / "oxedi_core" / "specs"
 IGNORE = Path(__file__).resolve().parents[1] / "spec_vs_pyx12.ignore.json"
-OUT = REPO / ".superpowers" / "spec_vs_pyx12"
+OUT = REPO / ".doc" / "scratch" / "spec_vs_pyx12"
 
 VERSIONS = {
     "5010": {"map": "835.5010.X221.A1.xml", "patches": []},

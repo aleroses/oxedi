@@ -5,85 +5,7 @@ use std::fmt;
 
 use super::error::SpecError;
 use super::raw::RawElement;
-
-/// The data type of an element, as the X12 standard names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ElementType {
-    /// `AN`: a string.
-    An,
-    /// `ID`: a code from a list.
-    Id,
-    /// `N0` to `N9`: an integer with that many implied decimal places.
-    N(u8),
-    /// `R`: a decimal number with an explicit point, kept at `scale` places.
-    R {
-        /// Decimal places; 2 unless the spec says otherwise.
-        scale: u8,
-    },
-    /// `DT`: a date, `CCYYMMDD` or `YYMMDD`.
-    Dt,
-    /// `TM`: a time, `HHMM` optionally followed by seconds and decimal seconds.
-    Tm,
-}
-
-impl ElementType {
-    /// Largest `scale` an `R` element may declare. An `R` value is held as an
-    /// `i128` scaled by `10^scale` in a column of precision 38, so a scale of
-    /// 18 still leaves 20 digits for the integer part.
-    pub const MAX_SCALE: u8 = 18;
-
-    /// Reads the type code of an element definition; `scale` is the
-    /// definition's `scale` key, which only `R` accepts.
-    pub(super) fn parse(code: &str, scale: Option<u8>) -> Result<ElementType, ElementDefError> {
-        let kind = match code.as_bytes() {
-            b"AN" => ElementType::An,
-            b"ID" => ElementType::Id,
-            b"R" => ElementType::R {
-                scale: scale.unwrap_or(2),
-            },
-            b"DT" => ElementType::Dt,
-            b"TM" => ElementType::Tm,
-            [b'N', digit @ b'0'..=b'9'] => ElementType::N(digit - b'0'),
-            _ => {
-                return Err(ElementDefError::UnknownType {
-                    found: code.to_string(),
-                });
-            }
-        };
-        if scale.is_some() && !matches!(kind, ElementType::R { .. }) {
-            return Err(ElementDefError::ScaleWithoutR {
-                kind: code.to_string(),
-            });
-        }
-        Ok(kind)
-    }
-
-    /// The length of a value as X12 counts it: numeric types count digits
-    /// only (no sign, no point), every other type counts bytes.
-    pub(crate) fn length_of(self, text: &[u8]) -> usize {
-        match self {
-            ElementType::N(_) | ElementType::R { .. } => {
-                text.iter().filter(|byte| byte.is_ascii_digit()).count()
-            }
-            _ => text.len(),
-        }
-    }
-}
-
-impl fmt::Display for ElementType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ElementType::An => write!(f, "AN (string)"),
-            ElementType::Id => write!(f, "ID (code)"),
-            ElementType::N(places) => {
-                write!(f, "N{places} (integer with {places} implied decimals)")
-            }
-            ElementType::R { scale } => write!(f, "R (decimal, scale {scale})"),
-            ElementType::Dt => write!(f, "DT (date CCYYMMDD or YYMMDD)"),
-            ElementType::Tm => write!(f, "TM (time HHMM, HHMMSS or HHMMSSD..)"),
-        }
-    }
-}
+use crate::value::{ElementType, LengthRange, TypeCodeError};
 
 /// One element of a segment, or one component of a composite element.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,13 +34,18 @@ impl ElementDef {
     }
 }
 
+/// `true` when `value` is one of `codes`, a list sorted by bytes.
+#[inline]
+pub(crate) fn holds_code(codes: &[String], value: &[u8]) -> bool {
+    codes
+        .binary_search_by(|code| code.as_bytes().cmp(value))
+        .is_ok()
+}
+
 /// `true` when `codes` (sorted by bytes) is a code list and `value` is not
 /// in it; an empty list rejects nothing.
 pub(crate) fn rejects_code(codes: &[String], value: &[u8]) -> bool {
-    !codes.is_empty()
-        && codes
-            .binary_search_by(|code| code.as_bytes().cmp(value))
-            .is_err()
+    !codes.is_empty() && !holds_code(codes, value)
 }
 
 /// The elements of one segment id.
@@ -214,6 +141,15 @@ pub enum ElementDefError {
     },
 }
 
+impl From<TypeCodeError> for ElementDefError {
+    fn from(error: TypeCodeError) -> ElementDefError {
+        match error {
+            TypeCodeError::UnknownType { found } => ElementDefError::UnknownType { found },
+            TypeCodeError::ScaleWithoutR { kind } => ElementDefError::ScaleWithoutR { kind },
+        }
+    }
+}
+
 impl fmt::Display for ElementDefError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -225,12 +161,9 @@ impl fmt::Display for ElementDefError {
             ElementDefError::DuplicateName { name, first } => {
                 write!(f, "name {name:?} is already used by position {first:?}")
             }
-            ElementDefError::UnknownType { found } => write!(
-                f,
-                "type {found:?} is not one of AN, ID, N0 to N9, R, DT, TM"
-            ),
+            ElementDefError::UnknownType { found } => TypeCodeError::write_unknown_type(f, found),
             ElementDefError::ScaleWithoutR { kind } => {
-                write!(f, "\"scale\" applies only to type R; found type {kind:?}")
+                TypeCodeError::write_scale_without_r(f, kind)
             }
             ElementDefError::MinAboveMax { min, max } => {
                 write!(f, "\"min\" {min} is greater than \"max\" {max}")
@@ -262,18 +195,14 @@ impl fmt::Display for ElementDefError {
                 length,
                 min,
                 max,
-            } => {
-                write!(
-                    f,
-                    "code {code:?} at codes[{index}] has length {length}; the element allows "
-                )?;
-                match (min, max) {
-                    (Some(min), Some(max)) => write!(f, "{min} to {max}"),
-                    (Some(min), None) => write!(f, "at least {min}"),
-                    (None, Some(max)) => write!(f, "at most {max}"),
-                    (None, None) => write!(f, "any length"),
+            } => write!(
+                f,
+                "code {code:?} at codes[{index}] has length {length}; the element allows {}",
+                LengthRange {
+                    min: *min,
+                    max: *max
                 }
-            }
+            ),
             ElementDefError::DuplicateCode {
                 code,
                 first,
@@ -312,7 +241,9 @@ pub(super) fn parse_position(key: &str) -> Option<usize> {
 }
 
 /// Compiles the elements of `segment`, or the components of the element at
-/// `parent` (its key as written) when one is given.
+/// `parent` (its key as written) when one is given. Each definition is read
+/// one part at a time, in the order its errors are reported: position, name,
+/// type, lengths, codes, composite.
 pub(super) fn compile_elements(
     segment: &str,
     raw: &BTreeMap<String, RawElement>,
@@ -321,87 +252,124 @@ pub(super) fn compile_elements(
     let mut elements = BTreeMap::new();
     let mut names: BTreeMap<&str, &str> = BTreeMap::new();
     for (key, def) in raw {
-        let position_text = match parent {
-            Some(parent) => format!("{parent}.composite.{key}"),
-            None => key.clone(),
-        };
         let fail = |reason| SpecError::BadElementDef {
             segment: segment.to_string(),
-            position: position_text.clone(),
+            position: position_text(parent, key),
             reason,
         };
         let position =
             parse_position(key).ok_or_else(|| fail(ElementDefError::NonCanonicalPosition))?;
-        if def.name.is_empty() {
-            return Err(fail(ElementDefError::EmptyName));
-        }
-        if let Some(first) = names.insert(def.name.as_str(), key.as_str()) {
-            return Err(fail(ElementDefError::DuplicateName {
-                name: def.name.clone(),
-                first: first.to_string(),
-            }));
-        }
-        let kind = ElementType::parse(&def.kind, def.scale).map_err(fail)?;
-        if let ElementType::R { scale } = kind
-            && scale > ElementType::MAX_SCALE
-        {
-            return Err(fail(ElementDefError::ScaleAboveMaximum { scale }));
-        }
-        if def.max == Some(0) {
-            return Err(fail(ElementDefError::ZeroMax));
-        }
-        if let (Some(min), Some(max)) = (def.min, def.max)
-            && min > max
-        {
-            return Err(fail(ElementDefError::MinAboveMax { min, max }));
-        }
-        if def.codes.is_some() && !def.composite.is_empty() {
-            return Err(fail(ElementDefError::CodesOnComposite));
-        }
-        if def.codes.is_some() && matches!(kind, ElementType::N(_) | ElementType::R { .. }) {
-            return Err(fail(ElementDefError::CodesOnNumeric {
-                kind: def.kind.clone(),
-            }));
-        }
-        let codes = match &def.codes {
-            None => Vec::new(),
-            Some(codes) => compile_codes(codes, kind, def.min, def.max).map_err(fail)?,
-        };
-        let composite = if def.composite.is_empty() {
-            BTreeMap::new()
-        } else if parent.is_some() {
-            return Err(fail(ElementDefError::NestedComposite));
-        } else if kind != ElementType::An {
-            return Err(fail(ElementDefError::CompositeOnNonAn {
-                kind: def.kind.clone(),
-            }));
-        } else {
-            compile_elements(segment, &def.composite, Some(key))?
-        };
+        claim_name(&mut names, &def.name, key).map_err(fail)?;
+        let element = compile_element(def, parent.is_some()).map_err(fail)?;
+        // A simple element has no components, which compile to an empty map.
+        let composite = compile_elements(segment, &def.composite, Some(key))?;
         elements.insert(
             position,
             ElementDef {
-                name: def.name.clone(),
-                kind,
-                required: def.required,
-                min: def.min,
-                max: def.max,
                 composite,
-                codes,
+                ..element
             },
         );
     }
     Ok(elements)
 }
 
-/// Validates a code list against its element's type and lengths and returns
-/// it sorted by bytes, the order the element check searches.
+/// The position of an element as an error names it: its key, or
+/// `<parent>.composite.<key>` for a component.
+fn position_text(parent: Option<&str>, key: &str) -> String {
+    match parent {
+        Some(parent) => format!("{parent}.composite.{key}"),
+        None => key.to_string(),
+    }
+}
+
+/// Records `name` for the element at `key`; refused when it is empty or
+/// another element at the same level already has it.
+fn claim_name<'r>(
+    names: &mut BTreeMap<&'r str, &'r str>,
+    name: &'r str,
+    key: &'r str,
+) -> Result<(), ElementDefError> {
+    if name.is_empty() {
+        return Err(ElementDefError::EmptyName);
+    }
+    match names.insert(name, key) {
+        None => Ok(()),
+        Some(first) => Err(ElementDefError::DuplicateName {
+            name: name.to_string(),
+            first: first.to_string(),
+        }),
+    }
+}
+
+/// Compiles one definition but its components: its type, lengths and codes,
+/// and whether it may declare a composite (`component` when it is one).
+fn compile_element(def: &RawElement, component: bool) -> Result<ElementDef, ElementDefError> {
+    let kind = element_type(&def.kind, def.scale)?;
+    check_lengths(def.min, def.max)?;
+    let composite = !def.composite.is_empty();
+    let codes = match &def.codes {
+        None => Vec::new(),
+        Some(codes) => compile_codes(codes, kind, def.min, def.max, composite)?,
+    };
+    if composite {
+        composite_allowed(kind, component)?;
+    }
+    Ok(ElementDef {
+        name: def.name.clone(),
+        kind,
+        required: def.required,
+        min: def.min,
+        max: def.max,
+        composite: BTreeMap::new(),
+        codes,
+    })
+}
+
+/// Reads a `type` and its `scale`; an `R` scale must not pass
+/// [`ElementType::MAX_SCALE`].
+fn element_type(code: &str, scale: Option<u8>) -> Result<ElementType, ElementDefError> {
+    match ElementType::parse(code, scale)? {
+        ElementType::R { scale } if scale > ElementType::MAX_SCALE => {
+            Err(ElementDefError::ScaleAboveMaximum { scale })
+        }
+        kind => Ok(kind),
+    }
+}
+
+/// Checks `min` and `max`: a `max` of 0 admits no value, and `min` may not
+/// pass `max`.
+fn check_lengths(min: Option<usize>, max: Option<usize>) -> Result<(), ElementDefError> {
+    match (min, max) {
+        (_, Some(0)) => Err(ElementDefError::ZeroMax),
+        (Some(min), Some(max)) if min > max => Err(ElementDefError::MinAboveMax { min, max }),
+        _ => Ok(()),
+    }
+}
+
+/// Whether an element of type `kind` may declare a composite: only an `AN`
+/// element that is not itself a component.
+fn composite_allowed(kind: ElementType, component: bool) -> Result<(), ElementDefError> {
+    if component {
+        Err(ElementDefError::NestedComposite)
+    } else if kind != ElementType::An {
+        Err(ElementDefError::CompositeOnNonAn { kind: kind.code() })
+    } else {
+        Ok(())
+    }
+}
+
+/// Validates a code list against its element (of type `kind`, with lengths
+/// `min` and `max`, declaring a composite when `composite`) and returns it
+/// sorted by bytes, the order the element check searches.
 pub(super) fn compile_codes(
     codes: &[String],
     kind: ElementType,
     min: Option<usize>,
     max: Option<usize>,
+    composite: bool,
 ) -> Result<Vec<String>, ElementDefError> {
+    codes_apply(kind, composite)?;
     if codes.is_empty() {
         return Err(ElementDefError::EmptyCodes);
     }
@@ -410,12 +378,11 @@ pub(super) fn compile_codes(
         if code.is_empty() {
             return Err(ElementDefError::EmptyCode { index });
         }
-        let length = kind.length_of(code.as_bytes());
-        if min.is_some_and(|min| length < min) || max.is_some_and(|max| length > max) {
+        if !kind.length_in_range(code.as_bytes(), LengthRange { min, max }) {
             return Err(ElementDefError::CodeLength {
                 index,
                 code: code.clone(),
-                length,
+                length: kind.length_of(code.as_bytes()),
                 min,
                 max,
             });
@@ -429,4 +396,17 @@ pub(super) fn compile_codes(
         }
     }
     Ok(seen.into_keys().map(str::to_string).collect())
+}
+
+/// Whether a code list applies to an element of type `kind` that declares a
+/// composite when `composite`: only to a simple element or a component, of
+/// a type that is not numeric.
+fn codes_apply(kind: ElementType, composite: bool) -> Result<(), ElementDefError> {
+    if composite {
+        Err(ElementDefError::CodesOnComposite)
+    } else if kind.is_numeric() {
+        Err(ElementDefError::CodesOnNumeric { kind: kind.code() })
+    } else {
+        Ok(())
+    }
 }

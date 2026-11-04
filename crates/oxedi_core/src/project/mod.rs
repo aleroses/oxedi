@@ -82,13 +82,14 @@ mod unknown;
 #[cfg(test)]
 mod unread_tests;
 
-use crate::column::{Cell, ColumnType, Table, Tables};
+use crate::column::{Cell, Table, Tables};
 use crate::delimiters::Delimiters;
 use crate::diagnostic::Diagnostic;
 use crate::engine::Event;
 use crate::mask::Mask;
 use crate::segment::Segment;
 use crate::spec::{LoopId, OccurrenceDef, Spec};
+use crate::value::ColumnType;
 
 use carry::Carried;
 use check::Checked;

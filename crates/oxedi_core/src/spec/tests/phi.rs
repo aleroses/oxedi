@@ -1,6 +1,7 @@
 //! The `phi` and `phi_seed` keys: which columns hold patient data.
 
 use crate::spec::*;
+use crate::value::ElementType;
 use crate::{Phi, SpecError};
 
 fn spec_with(tables: &str) -> Result<Spec, SpecError> {
@@ -379,4 +380,40 @@ fn phi_declarations_of_the_wrong_shape_show_the_spec_error() {
     )
     .unwrap();
     assert_eq!(spec.table("t").unwrap().phi(0), None);
+}
+
+#[test]
+fn phi_accepts_only_text_elements() {
+    let spec = |element: usize| {
+        Spec::from_json(&format!(
+            r#"{{"name":"t","loops":{{"A":{{"trigger":{{"segment":"AA"}}}}}},
+                "segments":{{"AA":{{"elements":{{
+                    "1":{{"name":"text","type":"AN"}},
+                    "2":{{"name":"code","type":"ID"}},
+                    "3":{{"name":"amount","type":"N2"}}}}}}}},
+                "tables":{{"t":{{"loops":["A"],"columns":{{
+                    "c":{{"segment":"AA","element":{element},"phi":"name"}}}}}}}}}}"#
+        ))
+    };
+    let Err(SpecError::BadTable { column, reason, .. }) = spec(3) else {
+        panic!("a name flag over an N2 element is refused");
+    };
+    assert_eq!(column.as_deref(), Some("c"));
+    assert_eq!(
+        reason,
+        TableDefError::PhiNeedsText {
+            kind: "name",
+            found: ColumnKind::Element(Some(ElementType::N(2))),
+        }
+    );
+    assert_eq!(
+        reason.to_string(),
+        "\"phi\": \"name\" applies to a text column; this column is N2 (integer with 2 implied decimals)"
+    );
+    for element in [1, 2, 9] {
+        assert!(
+            spec(element).is_ok(),
+            "element {element} is text or undefined"
+        );
+    }
 }

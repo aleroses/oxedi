@@ -50,7 +50,7 @@ The writer uses the spec that parsed the tables, else the built-in 5010 spec.
 
 - A dictionary of frames, as above, does not carry the parse's spec. Pass it:
   `spec=result.spec` (`result.tables.spec` is the same one).
-- For a 4010 file you can also pass `oxedi.Spec.builtin("4010")`.
+- For a 4010 file you can also pass `oxedi.Spec.builtin(oxedi.Version.V4010)`.
 
 !!! warning "4010 files"
     Without the 4010 spec, a 4010 file is written as 5010 and refused.

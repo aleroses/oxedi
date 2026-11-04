@@ -1,4 +1,4 @@
-use oxedi_core::{Cell, Document, DocumentError, IsaError, SizeError};
+use oxedi_core::{Cell, Document, DocumentError, SizeError};
 
 use super::{datum, of_unparsable, types};
 use crate::error::ReadError;
@@ -22,27 +22,6 @@ fn only_datum_follows_binary() {
     assert_eq!(changed, vec![7]);
     assert_eq!(binary.get(7), Some(&SqlType::Blob));
     assert_eq!(text.first(), Some(&SqlType::Bigint));
-}
-
-#[test]
-fn the_datum_of_a_file_without_isa_is_what_was_found() {
-    let bytes = b"hello, this is not an interchange".to_vec();
-    let Err(error) = Document::parse(bytes.as_slice()) else {
-        panic!("the input has no ISA");
-    };
-    assert_eq!(datum(&error, &bytes), b"hello, t");
-}
-
-#[test]
-fn the_datum_of_a_truncated_isa_skips_the_leading_trivia() {
-    let bytes = b"\xEF\xBB\xBF  ISA*00*".to_vec();
-    let error = DocumentError::Isa(IsaError::Truncated {
-        len: bytes.len(),
-        separators_found: 2,
-        byte_order_mark: true,
-        whitespace: 2,
-    });
-    assert_eq!(datum(&error, &bytes), b"ISA*00*");
 }
 
 #[test]

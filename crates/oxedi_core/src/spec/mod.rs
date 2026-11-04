@@ -6,29 +6,39 @@
 //! qualifier and own code lists) and an optional segment that closes it. An
 //! optional `segments` section names and types the elements of each segment
 //! id, wherever the segment appears. An optional `balancing` section lists
-//! amounts that must add up inside each instance of a loop. Loading compiles that into index-based definitions so the engine
+//! amounts that must add up inside each instance of a loop. An optional
+//! `summaries` section names figures computed over the tables, and an
+//! optional `default_table` names the table a reader shows when none is
+//! named. Loading compiles that into index-based definitions so the engine
 //! never compares strings, and keeps the JSON value so patches can be applied
 //! on top. Patches follow RFC 7386: objects merge key by key, while arrays and
 //! scalars replace wholesale; see [`Spec::merge_patch`] for what that means
 //! for a loop's occurrences.
 //!
 //! The module is split by responsibility: `loops`, `occurrences`, `segments`,
-//! `tables` and `balance` hold the definitions, `occurrence_error`,
-//! `table_error` and `balance_error` why an occurrence, a table or a
-//! balancing rule is rejected; `raw` the deserialization shapes;
-//! `shape` the JSON shape checks; `build` and `compile` the construction of a [`Spec`],
-//! `columns` the compilation of one table column; `phi` the check of the
-//! columns flagged as patient data and of the seed column;
-//! `error` the load error; `render` the text used in messages; `patch` the
-//! merge patch; `version` the version declaration and the choice of a spec
-//! by it.
+//! `tables`, `balance` and `summaries` hold the definitions,
+//! `occurrence_error`, `table_error`, `balance_error` and `summary_error` why
+//! an occurrence, a table, a balancing rule or a summary is rejected; `raw`
+//! the deserialization shapes; `schema` the JSON shape as data and `shape`
+//! the walk that checks a value against it; `build` the construction of a
+//! [`Spec`] as a pipeline of steps, `build_loops` the compilation of one loop,
+//! `compile` that of the tables and `columns` that of one table column;
+//! `phi` the check of the columns flagged as patient data and of the seed
+//! column; `error` the load error and `error_text` its `source` and the parts
+//! of its text built from lists; `render` the text used in messages; `patch`
+//! the merge patch; `version` the version declaration and the choice of a
+//! spec by it; `builtin` the registry of shipped specs by transaction and
+//! version.
 
 mod balance;
 mod balance_error;
 mod build;
+mod build_loops;
+mod builtin;
 mod columns;
 mod compile;
 mod error;
+mod error_text;
 mod loops;
 mod occurrence_error;
 mod occurrences;
@@ -36,8 +46,11 @@ mod patch;
 mod phi;
 mod raw;
 mod render;
+mod schema;
 mod segments;
 mod shape;
+mod summaries;
+mod summary_error;
 mod table_error;
 mod tables;
 #[cfg(test)]
@@ -46,20 +59,21 @@ mod version;
 
 pub use balance::{BalanceRule, BalanceTerm};
 pub use balance_error::BalanceError;
+pub use builtin::{Builtin, UnknownVersion, Version};
 pub use error::SpecError;
 pub use loops::{Control, ControlCount, ControlError, LoopDef, LoopId, Trigger};
 pub use occurrence_error::OccurrenceError;
 pub use occurrences::{OccurrenceDef, Qualifier, Usage};
 pub use patch::merge_patch;
 pub use phi::ColumnKind;
-pub use segments::{
-    ElementDef, ElementDefError, ElementType, ROW_COLUMN, SEGMENT_COLUMN, SegmentDef,
-};
+pub use segments::{ElementDef, ElementDefError, ROW_COLUMN, SEGMENT_COLUMN, SegmentDef};
+pub use summaries::Summary;
+pub use summary_error::SummaryDefError;
 pub use table_error::{AnchorChains, AnchorPositions, LoopSegments, TableDefError};
 pub use tables::{ColumnSource, Pick, Repeat, TableDef};
 pub use version::{DeclaredVersion, VersionError};
 
-pub(crate) use balance::{render_amount, render_terms};
+pub(crate) use balance::render_terms;
 pub(crate) use render::{render_key, render_selector, render_trigger};
 pub(crate) use segments::rejects_code;
 
@@ -79,6 +93,8 @@ pub struct Spec {
     segments: BTreeMap<Vec<u8>, SegmentDef>,
     tables: Vec<TableDef>,
     balancing: Vec<BalanceRule>,
+    summaries: Vec<(String, Summary)>,
+    default_table: Option<String>,
     version: Option<DeclaredVersion>,
     source: Value,
 }
@@ -208,11 +224,7 @@ impl Spec {
         element: usize,
         component: Option<usize>,
     ) -> Option<&ElementDef> {
-        let def = self.segments.get(segment)?.elements.get(&element)?;
-        match component {
-            None => Some(def),
-            Some(component) => def.composite.get(&component),
-        }
+        occurrences::element_def(&self.segments, segment, element, component)
     }
 
     /// Whether any column of any table is flagged as patient data.
@@ -245,6 +257,24 @@ impl Spec {
     /// Every balancing rule, in name order.
     pub fn balancing(&self) -> &[BalanceRule] {
         &self.balancing
+    }
+
+    /// Every summary with its name, in name order.
+    pub fn summaries(&self) -> &[(String, Summary)] {
+        &self.summaries
+    }
+
+    /// The summary `name`, when the spec declares it.
+    pub fn summary(&self, name: &str) -> Option<&Summary> {
+        self.summaries
+            .iter()
+            .find_map(|(declared, summary)| (declared == name).then_some(summary))
+    }
+
+    /// The table a reader shows when the caller names none, when the spec
+    /// declares one (`default_table`); it is always one of [`Self::tables`].
+    pub fn default_table(&self) -> Option<&str> {
+        self.default_table.as_deref()
     }
 
     /// Children of a loop, or the top-level loops for `None`.

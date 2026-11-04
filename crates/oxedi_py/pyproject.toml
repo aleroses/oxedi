@@ -40,8 +40,17 @@ Changelog = "https://github.com/javillegasna/oxedi/blob/master/CHANGELOG.md"
 edi-835-parser = ["pandas>=2.0.3,<3", "pyarrow>=14"]
 pandas = ["pandas>=2", "pyarrow>=14"]
 polars = ["polars>=1.0"]
-pyx12 = ["pyx12>=4.0,<5"]
+pyx12 = ["pyx12>=4.0,<4.0.1"]
+
+# pyx12 4.0.1 reports findings in a shape `oxedi.pyx12` does not read yet, so every pin stays below it.
+# Contributor tools, never published metadata. `make venv` installs the `contributor` group; CI and
+# `.venv-nopyx12` install `test` with `uv pip install --group crates/oxedi_py/pyproject.toml:test`.
+[dependency-groups]
 test = ["pytest>=8", "polars>=1.0", "pyarrow>=14", "pandas>=2.0.3,<3", "edi-835-parser==1.8.0", "duckdb>=1.1"]
+profile = ["py-spy>=0.4"]
+# Everything `make venv` installs, so a sandbox fetch and a developer machine get the same tools.
+# Not named `dev`: `maturin develop` installs a group of that name into whatever venv it builds into.
+contributor = ["maturin", "mypy", "pandas-stubs", "pyarrow-stubs", "pyx12>=4.0,<4.0.1", {include-group = "test"}, {include-group = "profile"}]
 
 [tool.maturin]
 module-name = "oxedi._core"

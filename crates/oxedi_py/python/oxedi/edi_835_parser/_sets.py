@@ -29,9 +29,7 @@ BytesLike = Union[bytes, bytearray, memoryview]
 
 _SUFFIXES = (".txt", ".835", ".DAT")
 TRANSACTION_DATE, _ = position("rows_payments", "transaction_date")
-ORGANIZATION_ID = position("rows_organizations", "identification_code")
-ADDRESS = position("rows_organizations", "address")
-LOCATION = {k: position("rows_organizations", k) for k in ("city", "state", "zip_code")}
+LOCATION = ("city", "state", "zip_code")
 
 
 class TransactionSet:
@@ -75,18 +73,17 @@ class TransactionSet:
         """The N1 loops, with an address and a location when the loop has an
         N3 or N4 segment; an element the segment holds empty reads ``""``,
         as in the library."""
-        t, d = self._t["rows_organizations"], self._d
+        t = self._t["rows_organizations"]
         out = []
         for i in range(len(t)):
             location = address = None
             at = t["location_segment"][i]
             if at is not None:
-                location = Location(*(written(text(t[k][i]), d, at, *LOCATION[k]) for k in LOCATION))
+                location = Location(*(written(t[k][i]) for k in LOCATION))
             at = t["address_segment"][i]
             if at is not None:
-                address = Address(written(text(t["address"][i]), d, at, *ADDRESS))
-            identification_code = written(integer(t["identification_code"][i]), self._d,
-                                          t["segment"][i], *ORGANIZATION_ID)
+                address = Address(written(t["address"][i]))
+            identification_code = written(t["identification_code"][i], integer)
             out.append(Organization(
                 OrganizationSegment(mapped(_codes.ORGANIZATION_TYPES, text(t["type"][i])),
                                     text(t["name"][i]), identification_code),

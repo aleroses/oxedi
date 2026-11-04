@@ -5,7 +5,7 @@ mod common;
 
 use std::borrow::Cow;
 
-use oxedi_core::{Delimiters, Element, Segment, SegmentWriteError, Tokenizer, frame::is_trivia};
+use oxedi_core::{Delimiters, Element, Segment, SegmentWriteError, Tokenizer, trivia::is_trivia};
 use proptest::prelude::*;
 
 const ELEMENT: u8 = b'*';

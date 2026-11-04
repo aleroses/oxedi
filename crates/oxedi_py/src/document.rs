@@ -1,9 +1,9 @@
 //! `Document`, `Segment` and `Delimiters`: the file held losslessly.
 
 use oxedi_core::{Delimiters, Document, Element};
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyOverflowError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList};
+use pyo3::types::{PyBytes, PyInt, PyList};
 use pyo3_stub_gen::derive::{gen_methods_from_python, gen_stub_pyclass, gen_stub_pymethods};
 use pyo3_stub_gen::type_info::{
     MemberInfo, MethodInfo, MethodType, ParameterDefault, ParameterInfo, ParameterKind,
@@ -285,6 +285,63 @@ impl PySegment {
     }
 }
 
+/// A simple element as `bytes`, a composite one as a list of `bytes`.
+fn element_object<'py>(py: Python<'py>, element: &Element<'_>) -> PyResult<Bound<'py, PyAny>> {
+    match element {
+        Element::Simple(value) => Ok(PyBytes::new(py, value).into_any()),
+        Element::Composite(values) => {
+            let parts = PyList::empty(py);
+            for value in values {
+                parts.append(PyBytes::new(py, value))?;
+            }
+            Ok(parts.into_any())
+        }
+    }
+}
+
+/// A 1-based index argument as `usize`. Below 1 is refused with `refusal`
+/// naming the value; an integer beyond `i64` is refused when negative and
+/// otherwise lies past every place, so it reads as the largest index.
+fn one_based(
+    value: &Bound<'_, PyInt>,
+    refusal: impl Fn(&Bound<'_, PyInt>) -> String,
+) -> PyResult<usize> {
+    match value.extract::<i64>() {
+        Ok(number) => usize::try_from(number)
+            .ok()
+            .filter(|at| *at >= 1)
+            .ok_or_else(|| PyValueError::new_err(refusal(value))),
+        Err(error) if error.is_instance_of::<PyOverflowError>(value.py()) => {
+            if value.lt(0)? {
+                Err(PyValueError::new_err(refusal(value)))
+            } else {
+                Ok(usize::MAX)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The 1-based `position` and `component` of `method` as indexes, refusing
+/// one below 1 with the value it got.
+fn places(
+    method: &str,
+    position: &Bound<'_, PyInt>,
+    component: Option<&Bound<'_, PyInt>>,
+) -> PyResult<(usize, Option<usize>)> {
+    let position = one_based(position, |got| {
+        format!("{method}: position must be 1 or more (XX01 is 1), got {got}")
+    })?;
+    let component = component
+        .map(|value| {
+            one_based(value, |got| {
+                format!("{method}: component must be 1 or more, got {got}")
+            })
+        })
+        .transpose()?;
+    Ok((position, component))
+}
+
 fn out_of_range(index: usize, len: usize) -> PyErr {
     PyIndexError::new_err(format!(
         "segment index {index} is out of range: the document has {len} segments"
@@ -319,19 +376,54 @@ impl PySegment {
         self.with(py, |segment| -> PyResult<Bound<'py, PyList>> {
             let list = PyList::empty(py);
             for element in &segment.elements {
-                match element {
-                    Element::Simple(value) => list.append(PyBytes::new(py, value))?,
-                    Element::Composite(values) => {
-                        let parts = PyList::empty(py);
-                        for value in values {
-                            parts.append(PyBytes::new(py, value))?;
-                        }
-                        list.append(parts)?;
-                    }
-                }
+                list.append(element_object(py, element)?)?;
             }
             Ok(list)
         })?
+    }
+
+    /// The element at the 1-based `position` (`XX01` is 1), or one of its
+    /// components: as `elements` holds it without `component` (`bytes` for
+    /// a simple element, a list of `bytes` for a composite one), and the
+    /// bytes of that 1-based component with it (component 1 of a simple
+    /// element is the element). `None` when the segment has no such place.
+    #[pyo3(signature = (position, component=None))]
+    #[gen_stub(override_return_type(type_repr = "builtins.bytes | builtins.list[builtins.bytes] | None", imports = ("builtins",)))]
+    fn element<'py>(
+        &self,
+        py: Python<'py>,
+        position: &Bound<'_, PyInt>,
+        component: Option<&Bound<'_, PyInt>>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let (position, component) = places("Segment.element", position, component)?;
+        self.with(py, |segment| -> PyResult<Option<Bound<'py, PyAny>>> {
+            let Some(component) = component else {
+                return segment
+                    .element(position)
+                    .map(|e| element_object(py, e))
+                    .transpose();
+            };
+            Ok(segment
+                .component(position, component)
+                .map(|bytes| PyBytes::new(py, bytes).into_any()))
+        })?
+    }
+
+    /// Whether the segment has the element at the 1-based `position`, or
+    /// that 1-based `component` of it, even when it is empty: `element(...)`
+    /// is not `None`.
+    #[pyo3(signature = (position, component=None))]
+    fn has(
+        &self,
+        py: Python<'_>,
+        position: &Bound<'_, PyInt>,
+        component: Option<&Bound<'_, PyInt>>,
+    ) -> PyResult<bool> {
+        let (position, component) = places("Segment.has", position, component)?;
+        self.with(py, |segment| match component {
+            None => segment.element(position).is_some(),
+            Some(component) => segment.component(position, component).is_some(),
+        })
     }
 
     /// The exact bytes of the segment: leading trivia, body and terminator.

@@ -50,12 +50,7 @@ impl PyMask {
     }
 
     fn __repr__(&self) -> String {
-        let dates = match self.inner.dates() {
-            DateMode::Year => "year",
-            DateMode::Shift => "shift",
-            DateMode::Keep => "keep",
-        };
-        format!("Mask(key=<hidden>, dates='{dates}')")
+        format!("Mask(key=<hidden>, dates='{}')", self.inner.dates().word())
     }
 }
 

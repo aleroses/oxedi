@@ -59,6 +59,19 @@ fn element_is_one_based_like_x12() {
     assert_eq!(segment.element(3), None);
 }
 
+#[test]
+fn component_is_one_based_and_component_one_of_a_simple_element_is_the_element() {
+    let delims = Delimiters::new(b'*', b':', b'~');
+    let segment = Segment::parse(0, frame(b"XX*a*b:c"), &delims);
+    assert_eq!(segment.component(1, 1), Some(&b"a"[..]));
+    assert_eq!(segment.component(1, 2), None);
+    assert_eq!(segment.component(2, 2), Some(&b"c"[..]));
+    assert_eq!(segment.component(2, 3), None);
+    assert_eq!(segment.component(2, 0), None);
+    assert_eq!(segment.component(0, 1), None);
+    assert_eq!(segment.component(3, 1), None);
+}
+
 fn written(segment: &Segment<'_>, delims: &Delimiters) -> Result<Vec<u8>, SegmentWriteError> {
     let mut out = Vec::new();
     segment.write_to(delims, &mut out)?;

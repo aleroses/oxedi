@@ -35,31 +35,21 @@ impl PyDiagnostic {
     /// The SNIP level of the rule: 1, 2 or 3.
     #[getter]
     fn level(&self) -> u8 {
-        match self.inner.level {
-            SnipLevel::L1 => 1,
-            SnipLevel::L2 => 2,
-            SnipLevel::L3 => 3,
-        }
+        self.inner.level.number()
     }
 
-    /// Who reported the finding: `"oxedi"` for the parser's own rules, the
-    /// validator's name for an external finding.
+    /// Who reported the diagnostic: `"oxedi"` for the parser's own rules,
+    /// the validator's name for an external one.
     #[getter]
     fn origin(&self) -> &str {
-        match &self.inner.rule {
-            Rule::External { origin, .. } => origin,
-            _ => "oxedi",
-        }
+        self.inner.origin()
     }
 
     /// The external validator's own code for the finding; `None` for the
     /// parser's own rules and for external findings without one.
     #[getter]
     fn code(&self) -> Option<&str> {
-        match &self.inner.rule {
-            Rule::External { code, .. } => code.as_deref(),
-            _ => None,
-        }
+        self.inner.code()
     }
 
     /// The name of the rule that failed, e.g. `RequiredElementMissing`.
@@ -80,13 +70,13 @@ impl PyDiagnostic {
         self.inner.segment
     }
 
-    /// The 1-based element position, when the finding has one.
+    /// The 1-based element position, when the diagnostic has one.
     #[getter]
     fn element(&self) -> Option<usize> {
         self.inner.element
     }
 
-    /// The 1-based component position, when the finding has one.
+    /// The 1-based component position, when the diagnostic has one.
     #[getter]
     fn component(&self) -> Option<usize> {
         self.inner.component
@@ -95,12 +85,7 @@ impl PyDiagnostic {
     /// The open loops, outermost first, joined by `/`; empty at the root.
     #[getter]
     fn path(&self) -> String {
-        self.inner
-            .path
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("/")
+        self.inner.path_text()
     }
 
     /// The offending value as it appears in the file.

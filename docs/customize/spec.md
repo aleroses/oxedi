@@ -19,7 +19,7 @@ from pathlib import Path
 import oxedi
 
 data = Path("remittance-4010.835").read_bytes()
-spec = oxedi.Spec.builtin(version="4010")
+spec = oxedi.Spec.builtin(version=oxedi.Version.V4010)
 result = oxedi.parse(data, spec=spec)
 print(result.spec, result.count_claims())
 ```
@@ -158,8 +158,8 @@ A patched spec also writes: pass it to `oxedi.write(frames, envelope, spec=spec)
 
 Every key a spec can hold, with what it means and the Rust code that reads it. The JSON is
 deserialized into the `Raw*` structs of `crates/oxedi_core/src/spec/raw.rs`, checked by
-`spec/shape.rs`, then compiled into the definitions of `oxedi_core::spec`. For the internal names, see the [glossary](https://github.com/javillegasna/oxedi/blob/master/ARCHITECTURE.md#glossary). An unknown key is an
-error that names its path, and so is a missing required key. Positions of elements and
+`spec/shape.rs` against the schema in `spec/schema.rs`, then compiled into the definitions of `oxedi_core::spec`. For the internal names, see the [glossary](https://github.com/javillegasna/oxedi/blob/master/ARCHITECTURE.md#glossary). An unknown key is an
+error that names its path and the keys allowed there, and so is a missing required key. Positions of elements and
 components are 1-based. The code names differ from the JSON in three places: a table's
 `loops` are its *anchors*, `end` is a loop's *closer*, and `ref` is the *reference* name.
 
@@ -173,6 +173,8 @@ components are 1-based. The code names differ from the JSON in three places: a t
 | `tables` | no | The tables of the projection, by table name. | `TableDef`, `compile.rs` |
 | `balancing` | no | Amounts that must add up inside a loop, by rule name. | `BalanceRule`, `balance.rs` |
 | `version` | no | Which versions of the format the spec covers, used to choose a built-in spec. | `DeclaredVersion`, `version.rs` |
+| `summaries` | no | Figures computed over the tables, by summary name. | `Summary`, `summaries.rs` |
+| `default_table` | no | The table a reader shows when the caller names none. | `Spec::default_table`, `summaries.rs` |
 
 ### `version`
 
@@ -300,3 +302,45 @@ A value of `target` or `sum` takes `occurrence` (required, the name of an occurr
 `elements` (required, positions to read), `loop` (optional, a loop below `per`; `per` itself
 when absent), `component` (optional) and `sign` (`"+"`, the default, or `"-"`). Every
 appearance of the occurrence adds to its side.
+
+### `summaries.<name>` and `default_table`
+
+A summary holds exactly one operation over a table of the spec: `count` (its rows),
+`distinct` (the distinct non-null values of a column, compared as text), `sum` (a column
+that reads a decimal `R` element; null cells are skipped) or `row` (named fields of the
+table's one row). Every table and column a summary names must be declared in `tables`, so a
+patch that removes one must also remove the summary (with `null`), or it fails to load with
+an error that names the summary. `default_table` names one of the tables. The built-in 835
+declares:
+
+```json
+"summaries": {
+  "count_claims":   {"count":    {"table": "claims"}},
+  "count_patients": {"distinct": {"table": "claims", "column": "patient_id"}},
+  "sum_payments":   {"sum":      {"table": "payments", "column": "total_payment_amount"}},
+  "payer": {"row": {"table": "payments", "fields": [
+    {"name": "name", "column": "payer_name"},
+    {"name": "identification_code", "column": "payer_id"},
+    {"name": "address", "column": "payer_address"},
+    {"name": "city", "column": "payer_city"},
+    {"name": "state", "column": "payer_state"},
+    {"name": "zip_code", "column": "payer_zip"}
+  ]}},
+  "payee": {"row": {"table": "payments", "fields": [
+    {"name": "name", "column": "payee_name"},
+    {"name": "identification_code", "column": "payee_id"},
+    {"name": "address", "column": "payee_address"},
+    {"name": "city", "column": "payee_city"},
+    {"name": "state", "column": "payee_state"},
+    {"name": "zip_code", "column": "payee_zip"}
+  ]}}
+},
+"default_table": "claims"
+```
+
+| Key | Meaning | Rust |
+|-----|---------|------|
+| `count.table` | The table whose rows are counted. | `Summary::Count` |
+| `distinct.table`, `distinct.column` | The column whose distinct values are counted. | `Summary::Distinct` |
+| `sum.table`, `sum.column` | The decimal column that is added up. | `Summary::Sum` |
+| `row.table`, `row.fields` | The table with one row, and the fields read from it: each `name` (the key the reader gives the value, unique) and `column`. | `Summary::Row` |

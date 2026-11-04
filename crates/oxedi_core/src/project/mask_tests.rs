@@ -1,3 +1,4 @@
+use super::mask::{date_datum, masked_date};
 use super::*;
 use crate::{DateMode, Document, Mask, Phi, Rule, SnipLevel};
 
@@ -419,4 +420,16 @@ fn unquoted_takes_an_accented_letter_or_a_hyphen_as_a_boundary() {
         super::quote::unquoted("D\u{e9} and D-1", &quoted),
         "<d>\u{e9} and <d>-1"
     );
+}
+
+#[test]
+fn a_date_with_no_year_start_is_masked_as_keyed_text() {
+    let mask = mask();
+    let token = mask.text(Phi::Date, b"20240318").to_vec();
+    assert_eq!(date_datum(&mask, Some(i32::MIN), b"20240318"), token);
+    assert_eq!(date_datum(&mask, None, b"20240318"), token);
+    assert_eq!(date_datum(&mask, Some(19_800), b"20240318"), b"20240101");
+    assert_eq!(masked_date(DateMode::Year, i32::MIN, None), None);
+    assert_eq!(masked_date(DateMode::Shift, i32::MIN, Some(-1)), None);
+    assert_eq!(masked_date(DateMode::Year, 19_800, None), Some(19_723));
 }

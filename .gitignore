@@ -1,7 +1,6 @@
 /target
 **/*.rs.bk
 __pycache__/
-.superpowers/
 
 # Maintainers' working notes (design contract, plans, spikes, state, study notes): kept locally,
 # not part of the repo. The public roadmap is docs/roadmap.md.

@@ -29,13 +29,14 @@
 //! holds at a flagged place are replaced by their masked forms where the
 //! message quotes them; the module notes of `quote.rs` say where.
 
-use crate::column::{civil_from_days, parse_dt};
 use crate::diagnostic::{Diagnostic, Rule};
 use crate::document::Document;
 use crate::element::Element;
 use crate::mask::{DateMode, Mask, Phi};
 use crate::segment::Segment;
 use crate::spec::Spec;
+use crate::value::civil_from_days;
+use crate::value::parse_dt;
 
 use super::plan::Plans;
 use super::quote::unquoted;
@@ -153,13 +154,7 @@ impl<'s> DatumMask<'s> {
         match kind {
             Phi::Name | Phi::Id => Some(self.mask.text(kind, datum).to_vec()),
             Phi::Date if self.mask.dates() == DateMode::Keep => None,
-            Phi::Date => Some(match parse_dt(datum) {
-                Some(days) => {
-                    let (year, month, day) = civil_from_days(Mask::year_start(days));
-                    format!("{year:04}{month:02}{day:02}").into_bytes()
-                }
-                None => self.mask.text(Phi::Date, datum).to_vec(),
-            }),
+            Phi::Date => Some(date_datum(self.mask, parse_dt(datum), datum)),
         }
     }
 }
@@ -235,7 +230,7 @@ impl<'s> Projector<'s> {
                     *slot = Slot::Bytes(from, bytes.len());
                 }
                 (Some(Phi::Date), Slot::Date(days)) => {
-                    *slot = Slot::Date(masked_date(mask.dates(), days, shift));
+                    *slot = masked_date(mask.dates(), days, shift).map_or(Slot::Null, Slot::Date);
                 }
                 _ => {}
             }
@@ -267,14 +262,25 @@ impl<'s> Projector<'s> {
     }
 }
 
+/// A date datum under the mask's year start: `CCYYMMDD` of January 1, or the
+/// keyed token of the datum when it is not a date or its year start has no
+/// civil form.
+pub(super) fn date_datum(mask: &Mask, days: Option<i32>, datum: &[u8]) -> Vec<u8> {
+    match days.and_then(Mask::year_start).and_then(civil_from_days) {
+        Some((year, month, day)) => format!("{year:04}{month:02}{day:02}").into_bytes(),
+        None => mask.text(Phi::Date, datum).to_vec(),
+    }
+}
+
 /// A date of a flagged column under `dates`, with the row's `shift` in days
-/// when one could be seeded.
-fn masked_date(dates: DateMode, days: i32, shift: Option<i32>) -> i32 {
+/// when one could be seeded; `None` when the date has no year start to fall
+/// back on, so the cell holds no date rather than an unmasked one.
+pub(super) fn masked_date(dates: DateMode, days: i32, shift: Option<i32>) -> Option<i32> {
     match dates {
-        DateMode::Keep => days,
+        DateMode::Keep => Some(days),
         DateMode::Year => Mask::year_start(days),
         DateMode::Shift => shift
             .and_then(|shift| days.checked_add(shift))
-            .unwrap_or_else(|| Mask::year_start(days)),
+            .or_else(|| Mask::year_start(days)),
     }
 }

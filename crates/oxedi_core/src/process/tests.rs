@@ -89,7 +89,7 @@ fn run_over_a_document_is_feeding_every_segment_then_finishing() {
         "BPR*I*0*C*CHK************20240101~TRN*1*2*1234567890~ZZZ~",
     ]);
     let document = Document::with_delimiters(input.as_bytes(), delimiters()).unwrap();
-    let (tables, diagnostics) = Processor::run(&spec, &document);
+    let (tables, diagnostics) = Processor::run(&spec, &document, None);
     let mut processor = Processor::new(&spec, &delimiters());
     let mut by_hand = Vec::new();
     for segment in Tokenizer::with_delimiters(input.as_bytes(), delimiters()) {
@@ -130,7 +130,7 @@ fn tables_drained_after_each_transaction_add_up_to_one_run() {
     processor.finish();
     drained.push(processor.take_tables());
     let document = Document::with_delimiters(input.as_bytes(), delimiters()).unwrap();
-    let (whole, _) = Processor::run(&spec, &document);
+    let (whole, _) = Processor::run(&spec, &document, None);
     for table in &whole {
         let rows = |tables: &Tables| -> Vec<String> {
             let part = tables.get(table.name()).unwrap();
@@ -165,7 +165,7 @@ fn a_processor_with_some_tables_fills_those_with_the_rows_of_a_full_run() {
         CLAIM,
     ]);
     let document = Document::with_delimiters(input.as_bytes(), delimiters()).unwrap();
-    let (whole, diagnostics) = Processor::run(&spec, &document);
+    let (whole, diagnostics) = Processor::run(&spec, &document, None);
 
     let mut processor = Processor::with_tables(&spec, &delimiters(), &["services"]).unwrap();
     let mut by_hand = Vec::new();
@@ -187,13 +187,13 @@ fn a_processor_with_some_tables_fills_those_with_the_rows_of_a_full_run() {
         "a service refers to its claim's row although claims is not filled"
     );
 
-    let only = Processor::run_tables(&spec, &document, &["claims", "payments"]).unwrap();
+    let only = Processor::run_tables(&spec, &document, &["claims", "payments"], None).unwrap();
     assert_eq!(only.len(), 2);
     for name in ["claims", "payments"] {
         assert_eq!(only.get(name), whole.get(name), "{name}");
     }
     assert!(
-        Processor::run_tables(&spec, &document, &[])
+        Processor::run_tables(&spec, &document, &[], None)
             .unwrap()
             .is_empty()
     );
@@ -204,7 +204,7 @@ fn an_unknown_table_name_is_an_error_naming_it_and_the_spec_tables() {
     let spec = Spec::builtin_835();
     let input = interchange(&[CLAIM]);
     let document = Document::with_delimiters(input.as_bytes(), delimiters()).unwrap();
-    let error = Processor::run_tables(&spec, &document, &["claims", "claim"]).unwrap_err();
+    let error = Processor::run_tables(&spec, &document, &["claims", "claim"], None).unwrap_err();
     assert_eq!(error.name, "claim");
     assert_eq!(
         error.tables,

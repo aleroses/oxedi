@@ -1,10 +1,11 @@
+import inspect
 import json
 
 import pytest
 
 import oxedi
 from conftest import LARGEST, read
-from oxedi import Spec, SpecError
+from oxedi import Spec, SpecError, Version
 
 PATCH = {"loops": {"ZZ": {"parent": "2100", "trigger": {"segment": "ZZ1"}}}}
 
@@ -93,12 +94,67 @@ def test_the_builtins_by_version():
     assert json.loads(five.to_json())["version"]["values"] == ["005010X221A1"]
 
 
+def test_a_version_names_its_release():
+    assert str(Version.V5010) == "5010"
+    assert Version.V4010.text == "4010"
+    assert Version.V5010 != Version.V4010
+    assert repr(Version.V5010) == "Version.V5010"
+    assert repr(Version.V4010) == "Version.V4010"
+    assert len({Version.V5010, Version.V5010, Version.V4010}) == 2
+    assert Spec.DEFAULT_VERSION == Version.V5010
+    assert Version.V5010 != 0
+    assert Version.V5010 != 5010
+
+
+def test_every_listed_version_is_a_member_of_the_class():
+    listed = Version.all()
+    assert listed
+    assert listed[0] == Spec.DEFAULT_VERSION
+    for version in listed:
+        assert getattr(Version, repr(version).split(".")[1]) == version
+
+
+def test_builtin_takes_a_version_or_its_text():
+    assert Spec.builtin(Version.V4010).to_json() == Spec.builtin("4010").to_json()
+    assert Spec.builtin(Version.V5010).to_json() == Spec.builtin().to_json()
+    with pytest.raises(TypeError) as info:
+        Spec.builtin(4010)  # type: ignore[arg-type]
+    assert str(info.value) == (
+        "Spec.builtin(version=4010): version must be an oxedi.Version or its text, not int"
+    )
+
+
+def test_a_version_whose_repr_fails_is_still_named_by_its_type():
+    class Broken:
+        def __repr__(self) -> str:
+            raise RuntimeError("no repr")
+
+    with pytest.raises(TypeError) as info:
+        Spec.builtin(Broken())  # type: ignore[arg-type]
+    assert str(info.value) == (
+        "Spec.builtin(version=an object whose repr failed): version must be an oxedi.Version "
+        "or its text, not test_a_version_whose_repr_fails_is_still_named_by_its_type.<locals>.Broken"
+    )
+
+
+def test_builtin_runtime_parameters_are_pinned():
+    # The stub test allows the default's runtime text (`...`); the parameters stay pinned here.
+    parameters = inspect.signature(Spec.builtin).parameters
+    assert list(parameters) == ["version"]
+    assert parameters["version"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert Spec.builtin().to_json() == Spec.builtin(Spec.DEFAULT_VERSION).to_json()
+
+
+def test_builtin_without_a_version_is_the_default():
+    assert Spec.builtin().to_json() == Spec.builtin("5010").to_json()
+
+
 def test_an_unknown_builtin_version_names_the_versions_there_are():
     with pytest.raises(ValueError) as info:
         Spec.builtin(version="6020")
     assert str(info.value) == (
-        'Spec.builtin(version="6020"): no built-in spec for that version; '
-        'the built-ins are "5010" and "4010"'
+        'Spec.builtin(version="6020"): unknown version "6020"; '
+        'version must be one of "5010", "4010"'
     )
 
 

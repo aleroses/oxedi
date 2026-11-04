@@ -1,4 +1,5 @@
 use oxedi_core::Delimiters;
+use oxedi_core::value::TimeUnit;
 use oxedi_core::write::Envelope;
 
 use super::super::error::CopyError;
@@ -107,7 +108,7 @@ fn typed_date_and_time_and_a_bare_line_break() {
             value(
                 Kind::Time {
                     value: 37_815_000_000,
-                    per_second: 1_000_000,
+                    unit: TimeUnit::Microsecond,
                 },
                 "TIME 10:30:15",
             ),
@@ -220,7 +221,7 @@ fn a_time_is_whole_seconds() {
         slot.1 = value(
             Kind::Time {
                 value: 37_800_500_000,
-                per_second: 1_000_000,
+                unit: TimeUnit::Microsecond,
             },
             "TIME 10:30:00.5",
         );
@@ -237,7 +238,7 @@ fn a_time_is_whole_seconds() {
         slot.1 = value(
             Kind::Time {
                 value: 86_400_000_000,
-                per_second: 1_000_000,
+                unit: TimeUnit::Microsecond,
             },
             "TIME 24:00:00",
         );
@@ -269,7 +270,7 @@ fn a_time_ns_is_whole_seconds_too() {
         value(
             Kind::Time {
                 value: value_ns,
-                per_second: 1_000_000_000,
+                unit: TimeUnit::Nanosecond,
             },
             shown,
         )

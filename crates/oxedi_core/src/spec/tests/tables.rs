@@ -471,15 +471,15 @@ fn a_table_key_the_schema_does_not_define_or_requires_is_named_with_its_path() {
     let cases = [
         (
             r#"{"t":{"loops":["A"],"anchor":"x"}}"#,
-            "spec: unknown key \"anchor\" at tables.t",
+            "spec: unknown key \"anchor\" at tables.t; the allowed keys are: columns, loops, phi_seed, ref, repeat, segment",
         ),
         (
             r#"{"t":{"loops":["A"],"columns":{"c":{"elemnt":1}}}}"#,
-            "spec: unknown key \"elemnt\" at tables.t.columns.c",
+            "spec: unknown key \"elemnt\" at tables.t.columns.c; the allowed keys are: component, element, group_element, loop, occurrence, phi, pick, segment, segment_index, where",
         ),
         (
             r#"{"t":{"loops":["A"],"repeat":{"from":1,"step":2,"to":3}}}"#,
-            "spec: unknown key \"to\" at tables.t.repeat",
+            "spec: unknown key \"to\" at tables.t.repeat; the allowed keys are: from, step",
         ),
         (
             r#"{"t":{"segment":"AA"}}"#,

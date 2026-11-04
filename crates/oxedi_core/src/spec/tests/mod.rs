@@ -1,6 +1,7 @@
 //! Unit tests of the spec module, one file per topic.
 
 mod balancing;
+mod builtin;
 mod codes;
 mod columns;
 mod controls;
@@ -11,6 +12,7 @@ mod patch;
 mod phi;
 mod segments;
 mod shape;
+mod summaries;
 mod tables;
 mod triggers;
 mod version;

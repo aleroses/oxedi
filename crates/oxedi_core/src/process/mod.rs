@@ -4,10 +4,11 @@
 //! it returns to the structure checker and to the projector, so the loop
 //! structure, the structural and element diagnostics and the table rows all
 //! come from the same walk. [`Processor::run`] does the same over a whole
-//! document and is the same code path. A processor given a [`Mask`] masks
-//! the columns the spec flags as patient data and the datums of every
-//! diagnostic, the checker's included, read from a place such a column reads
-//! (see [`Projector::with_mask`]).
+//! document and is the same code path. Given `Some(mask)`, [`Processor::run`]
+//! and [`Processor::with_mask`] mask the columns the spec flags as patient
+//! data and the datums of every diagnostic, the checker's included, read from
+//! a place such a column reads (see [`Projector::with_mask`]); `None` masks
+//! nothing.
 
 use crate::check::StructureChecker;
 use crate::column::Tables;
@@ -78,10 +79,13 @@ impl<'s> Processor<'s> {
         })
     }
 
-    /// The same processor, masking the columns the spec flags as patient
-    /// data and the datums read from them; see [`Projector::with_mask`].
-    pub fn with_mask(mut self, mask: &'s Mask) -> Self {
-        self.projector = self.projector.with_mask(mask);
+    /// The same processor; with `Some(mask)`, masking the columns the spec
+    /// flags as patient data and the datums read from them (see
+    /// [`Projector::with_mask`]). With `None` it is returned unchanged.
+    pub fn with_mask(mut self, mask: Option<&'s Mask>) -> Self {
+        if let Some(mask) = mask {
+            self.projector = self.projector.with_mask(mask);
+        }
         self
     }
 
@@ -140,17 +144,13 @@ impl<'s> Processor<'s> {
     }
 
     /// Processes a whole document: every segment, then `finish`. Returns
-    /// the tables and every diagnostic in stream order.
-    pub fn run(spec: &Spec, document: &Document<'_>) -> (Tables, Vec<Diagnostic>) {
-        Processor::new(spec, document.delimiters()).run_document(document)
-    }
-
-    /// Processes a whole document as [`Processor::run`] does, masking the
-    /// columns the spec flags as patient data and the datums read from them.
-    pub fn run_masked(
+    /// the tables and every diagnostic in stream order. With `Some(mask)`,
+    /// the columns the spec flags as patient data and the datums read from
+    /// them are masked.
+    pub fn run(
         spec: &Spec,
         document: &Document<'_>,
-        mask: &Mask,
+        mask: Option<&Mask>,
     ) -> (Tables, Vec<Diagnostic>) {
         Processor::new(spec, document.delimiters())
             .with_mask(mask)
@@ -159,24 +159,13 @@ impl<'s> Processor<'s> {
 
     /// Processes a whole document as [`Processor::run`] does, filling only
     /// the tables named in `names` and collecting no diagnostics. Each table
-    /// it returns holds the rows `run` gives that table. A name the spec does
-    /// not define is an [`UnknownTable`].
+    /// it returns holds the rows `run` gives that table with the `mask`
+    /// given to `run`. A name the spec does not define is an [`UnknownTable`].
     pub fn run_tables(
         spec: &Spec,
         document: &Document<'_>,
         names: &[&str],
-    ) -> Result<Tables, UnknownTable> {
-        let processor = Processor::with_tables(spec, document.delimiters(), names)?;
-        Ok(processor.run_document_tables(document))
-    }
-
-    /// [`Processor::run_tables`] with the masking of [`Processor::run_masked`]:
-    /// each table it returns holds the rows `run_masked` gives that table.
-    pub fn run_tables_masked(
-        spec: &Spec,
-        document: &Document<'_>,
-        names: &[&str],
-        mask: &Mask,
+        mask: Option<&Mask>,
     ) -> Result<Tables, UnknownTable> {
         let processor = Processor::with_tables(spec, document.delimiters(), names)?;
         Ok(processor.with_mask(mask).run_document_tables(document))

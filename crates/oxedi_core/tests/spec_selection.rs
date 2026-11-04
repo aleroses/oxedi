@@ -103,7 +103,7 @@ fn code_findings(bytes: Vec<u8>) -> Vec<Diagnostic> {
     let four = Spec::builtin_835_4010();
     let document = Document::parse(bytes).unwrap();
     let chosen = Spec::select(&[&five, &four], &five, document.segments());
-    let (_, diagnostics) = Processor::run(chosen, &document);
+    let (_, diagnostics) = Processor::run(chosen, &document, None);
     diagnostics
         .into_iter()
         .filter(

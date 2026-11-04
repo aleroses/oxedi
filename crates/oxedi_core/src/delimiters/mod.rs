@@ -12,7 +12,7 @@
 
 use std::fmt;
 
-use crate::frame::{BYTE_ORDER_MARK, leading_trivia};
+use crate::trivia::LeadingTrivia;
 
 /// The five delimiters of an interchange. Only `release` is never read from the
 /// file: X12 defines no release character, so it is opt-in by the caller.
@@ -59,6 +59,45 @@ pub enum IsaError {
 impl IsaError {
     /// How many leading bytes [`IsaError::NotIsa`] keeps.
     pub const FOUND_LEN: usize = 8;
+
+    /// The nominal length of an ISA segment, the most bytes
+    /// [`datum`](Self::datum) keeps of a truncated one.
+    pub const ISA_LEN: usize = 106;
+
+    /// How many bytes precede the ISA in the input the error was read from:
+    /// the byte order mark and the whitespace skipped.
+    pub fn skipped(&self) -> usize {
+        let (byte_order_mark, whitespace) = match self {
+            IsaError::NotIsa {
+                byte_order_mark,
+                whitespace,
+                ..
+            }
+            | IsaError::Truncated {
+                byte_order_mark,
+                whitespace,
+                ..
+            } => (*byte_order_mark, *whitespace),
+        };
+        LeadingTrivia {
+            byte_order_mark,
+            whitespace,
+        }
+        .len()
+    }
+
+    /// The bytes the error is about in `input`, the bytes it was read from:
+    /// what was found instead of `ISA`, or the first [`ISA_LEN`](Self::ISA_LEN)
+    /// bytes after the skipped ones of a truncated ISA.
+    pub fn datum<'a>(&'a self, input: &'a [u8]) -> &'a [u8] {
+        match self {
+            IsaError::NotIsa { found, .. } => found,
+            IsaError::Truncated { .. } => {
+                let rest = input.get(self.skipped()..).unwrap_or_default();
+                rest.get(..Self::ISA_LEN).unwrap_or(rest)
+            }
+        }
+    }
 }
 
 impl fmt::Display for IsaError {
@@ -240,13 +279,12 @@ impl Delimiters {
     /// leading trivia: a UTF-8 byte order mark at the very start, then
     /// whitespace. A [`IsaError::NotIsa`] or [`IsaError::Truncated`] names what was skipped.
     pub fn from_isa_after_leading_trivia(input: &[u8]) -> Result<Self, IsaError> {
-        let skipped = leading_trivia(input);
-        let byte_order_mark = input.starts_with(BYTE_ORDER_MARK);
-        let whitespace = if byte_order_mark {
-            skipped.saturating_sub(BYTE_ORDER_MARK.len())
-        } else {
-            skipped
-        };
+        let trivia = LeadingTrivia::of(input);
+        let LeadingTrivia {
+            byte_order_mark,
+            whitespace,
+        } = trivia;
+        let skipped = trivia.len();
         let rest = input.get(skipped..).unwrap_or_default();
         Self::from_isa(rest).map_err(|error| match error {
             IsaError::NotIsa { found, .. } => IsaError::NotIsa {

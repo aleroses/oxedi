@@ -1,4 +1,8 @@
-//! Construction of a [`Spec`] from JSON: loading, control compilation and structural checks.
+//! Construction of a [`Spec`] from JSON.
+//!
+//! A spec compiles as a pipeline: `STEPS` runs in order over a `Build`, one
+//! step per section or structural check, each reading what the steps before
+//! it built.
 
 use std::collections::BTreeMap;
 
@@ -7,163 +11,50 @@ use serde_json::Value;
 
 use super::Spec;
 use super::balance::compile_balancing;
+use super::build_loops::{check_cycles, compile_loop, held_segments};
 use super::compile::compile_tables;
 use super::error::SpecError;
-use super::loops::{Control, ControlCount, ControlError, LoopDef, LoopId, Trigger};
-use super::occurrences::{check_trigger, compile_occurrences, parse_usage};
-use super::raw::{RawControl, RawLoop, RawSegment, RawSpec};
+use super::loops::{LoopId, Trigger};
+use super::occurrences::{check_trigger, compile_occurrences};
+use super::raw::{RawLoop, RawSegment, RawSpec, RawVersion};
 use super::render::render_trigger;
-use super::segments::{SegmentDef, compile_elements, parse_position};
+use super::segments::{SegmentDef, compile_elements};
 use super::shape::{check_shape, section};
+use super::summaries::{compile_default_table, compile_summaries};
 use super::version::compile_version;
+
+/// A spec while it compiles, with the parts of the JSON the later steps read.
+struct Build {
+    spec: Spec,
+    /// The loops as written, in spec order.
+    defs: Vec<(String, RawLoop)>,
+    version: Option<RawVersion>,
+    default_table: Option<String>,
+}
+
+type Step = fn(&mut Build) -> Result<(), SpecError>;
+
+/// The compile steps, in the order they run.
+const STEPS: [Step; 11] = [
+    read_loops,
+    compile_loop_headers,
+    link_loops,
+    compile_segment_section,
+    compile_loop_occurrences,
+    compile_version_section,
+    check_trigger_ambiguity,
+    compile_table_section,
+    compile_balancing_section,
+    compile_summary_section,
+    compile_default_table_section,
+];
 
 impl Spec {
     pub(crate) fn from_value(source: Value) -> Result<Spec, SpecError> {
         check_shape(&source)?;
-        let raw = RawSpec::deserialize(&source).map_err(|e| SpecError::Schema {
-            loop_name: None,
-            source: e,
-        })?;
-        if raw.loops.is_empty() {
-            return Err(SpecError::NoLoops {
-                spec_name: raw.name,
-            });
-        }
-        let mut defs = Vec::with_capacity(raw.loops.len());
-        for (name, value) in section(&source, "loops") {
-            let def = RawLoop::deserialize(value).map_err(|e| SpecError::Schema {
-                loop_name: Some(name.to_string()),
-                source: e,
-            })?;
-            defs.push((name.to_string(), def));
-        }
-        let names: Vec<&str> = raw.loops.keys().map(String::as_str).collect();
-        let id_of = |name: &str| names.iter().position(|&n| n == name).map(LoopId);
-
-        let mut loops = Vec::with_capacity(defs.len());
-        for (name, def) in &defs {
-            let empty_at = |key: String| SpecError::EmptySegmentId {
-                loop_name: Some(name.clone()),
-                key,
-            };
-            if def.trigger.segment.is_empty() {
-                return Err(empty_at("trigger.segment".into()));
-            }
-            if def.end.as_deref() == Some("") {
-                return Err(empty_at("end".into()));
-            }
-            let usage =
-                parse_usage(def.usage.as_deref()).map_err(|found| SpecError::UnknownLoopUsage {
-                    loop_name: name.clone(),
-                    found,
-                })?;
-            if def.max == Some(0) {
-                return Err(SpecError::ZeroLoopMax {
-                    loop_name: name.clone(),
-                });
-            }
-            if def.end.as_deref() == Some(def.trigger.segment.as_str()) {
-                return Err(SpecError::EndIsTrigger {
-                    loop_name: name.clone(),
-                    segment: def.trigger.segment.clone(),
-                });
-            }
-            let parent = match &def.parent {
-                None => None,
-                Some(parent) => Some(id_of(parent).ok_or_else(|| SpecError::UnknownParent {
-                    loop_name: name.clone(),
-                    parent: parent.clone(),
-                })?),
-            };
-            let mut conditions = Vec::with_capacity(def.trigger.conditions.len());
-            for (position, value) in &def.trigger.conditions {
-                let parsed = parse_position(position).ok_or_else(|| SpecError::BadPosition {
-                    loop_name: name.clone(),
-                    position: position.clone(),
-                })?;
-                conditions.push((parsed, value.as_bytes().to_vec()));
-            }
-            conditions.sort();
-            let control = match &def.control {
-                None => None,
-                Some(raw) => Some(compile_control(raw, def.end.is_some()).map_err(|reason| {
-                    SpecError::BadControl {
-                        loop_name: name.clone(),
-                        reason,
-                    }
-                })?),
-            };
-            loops.push(LoopDef {
-                name: name.clone(),
-                parent,
-                trigger: Trigger {
-                    segment: def.trigger.segment.as_bytes().to_vec(),
-                    conditions,
-                },
-                occurrences: Vec::new(),
-                usage,
-                max: def.max,
-                segments: Vec::new(),
-                end: def.end.as_ref().map(|s| s.as_bytes().to_vec()),
-                control,
-                children: Vec::new(),
-            });
-        }
-
-        check_cycles(&loops)?;
-
-        let parents: Vec<Option<LoopId>> = loops.iter().map(|def| def.parent).collect();
-        let mut roots = Vec::new();
-        for (index, parent) in parents.into_iter().enumerate() {
-            match parent {
-                Some(parent) => loops[parent.0].children.push(LoopId(index)),
-                None => roots.push(LoopId(index)),
-            }
-        }
-
-        let mut segments = BTreeMap::new();
-        for (id, value) in section(&source, "segments") {
-            if id.is_empty() {
-                return Err(SpecError::EmptySegmentId {
-                    loop_name: None,
-                    key: "segments.\"\"".into(),
-                });
-            }
-            let def = RawSegment::deserialize(value).map_err(|e| SpecError::SegmentSchema {
-                segment: id.to_string(),
-                source: e,
-            })?;
-            let elements = compile_elements(id, &def.elements, None)?;
-            segments.insert(id.as_bytes().to_vec(), SegmentDef { elements });
-        }
-
-        for ((name, def), compiled) in defs.iter().zip(loops.iter_mut()) {
-            compiled.occurrences = compile_occurrences(name, &def.occurrences, &segments)?;
-            check_trigger(name, &compiled.occurrences, &compiled.trigger)?;
-            for occurrence in &compiled.occurrences {
-                if !occurrence.opens_on(&compiled.trigger)
-                    && !compiled.segments.contains(&occurrence.segment)
-                {
-                    compiled.segments.push(occurrence.segment.clone());
-                }
-            }
-        }
-
-        let version = raw.version.as_ref().map(compile_version).transpose()?;
-        let mut spec = Spec {
-            name: raw.name,
-            loops,
-            roots,
-            segments,
-            tables: Vec::new(),
-            balancing: Vec::new(),
-            version,
-            source,
-        };
-        spec.check_ambiguity()?;
-        spec.tables = compile_tables(&spec, section(&spec.source, "tables"))?;
-        spec.balancing = compile_balancing(&spec, section(&spec.source, "balancing"))?;
-        Ok(spec)
+        let mut build = Build::new(source)?;
+        STEPS.iter().try_for_each(|step| step(&mut build))?;
+        Ok(build.spec)
     }
 
     fn check_ambiguity(&self) -> Result<(), SpecError> {
@@ -227,53 +118,144 @@ impl Spec {
     }
 }
 
-/// Validates a loop's `control`; `has_end` says whether the loop declares an end segment.
-fn compile_control(raw: &RawControl, has_end: bool) -> Result<Control, ControlError> {
-    if !has_end {
-        return Err(ControlError::NoEnd);
-    }
-    let positions = [
-        ("opener_element", raw.opener_element),
-        ("closer_element", raw.closer_element),
-        ("count_element", raw.count_element),
-    ];
-    if let Some((key, _)) = positions.iter().find(|(_, position)| *position == 0) {
-        return Err(ControlError::ZeroPosition { key });
-    }
-    let count = match raw.count.as_str() {
-        "segments" => ControlCount::Segments,
-        "children" => ControlCount::Children,
-        _ => {
-            return Err(ControlError::UnknownCount {
-                found: raw.count.clone(),
+impl Build {
+    /// The spec's name and an empty structure, or why the top level is invalid.
+    fn new(source: Value) -> Result<Build, SpecError> {
+        let raw = RawSpec::deserialize(&source).map_err(|e| SpecError::Schema {
+            loop_name: None,
+            source: e,
+        })?;
+        if raw.loops.is_empty() {
+            return Err(SpecError::NoLoops {
+                spec_name: raw.name,
             });
         }
-    };
-    Ok(Control {
-        opener_element: raw.opener_element,
-        closer_element: raw.closer_element,
-        count_element: raw.count_element,
-        count,
-    })
+        Ok(Build {
+            spec: Spec {
+                name: raw.name,
+                loops: Vec::new(),
+                roots: Vec::new(),
+                segments: BTreeMap::new(),
+                tables: Vec::new(),
+                balancing: Vec::new(),
+                summaries: Vec::new(),
+                default_table: None,
+                version: None,
+                source,
+            },
+            defs: Vec::new(),
+            version: raw.version,
+            default_table: raw.default_table,
+        })
+    }
 }
 
-/// Fails with the first parent cycle found, walking from each loop in spec
-/// order. The members start at the loop the walk reaches twice.
-fn check_cycles(loops: &[LoopDef]) -> Result<(), SpecError> {
-    for start in 0..loops.len() {
-        let mut walk: Vec<LoopId> = Vec::new();
-        let mut current = Some(LoopId(start));
-        while let Some(id) = current {
-            if let Some(repeat) = walk.iter().position(|&seen| seen == id) {
-                let members = walk[repeat..]
-                    .iter()
-                    .map(|&member| loops[member.0].name.clone())
-                    .collect();
-                return Err(SpecError::Cycle { members });
-            }
-            walk.push(id);
-            current = loops[id.0].parent;
+fn read_loops(build: &mut Build) -> Result<(), SpecError> {
+    build.defs = section(&build.spec.source, "loops")
+        .into_iter()
+        .map(|(name, value)| {
+            RawLoop::deserialize(value)
+                .map(|def| (name.to_string(), def))
+                .map_err(|e| SpecError::Schema {
+                    loop_name: Some(name.to_string()),
+                    source: e,
+                })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(())
+}
+
+fn compile_loop_headers(build: &mut Build) -> Result<(), SpecError> {
+    let ids: BTreeMap<&str, LoopId> = build
+        .defs
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| (name.as_str(), LoopId(index)))
+        .collect();
+    let loops = build
+        .defs
+        .iter()
+        .map(|(name, def)| compile_loop(name, def, &ids))
+        .collect::<Result<Vec<_>, _>>()?;
+    check_cycles(&loops)?;
+    build.spec.loops = loops;
+    Ok(())
+}
+
+/// Gives each loop its children and the spec its top-level loops.
+fn link_loops(build: &mut Build) -> Result<(), SpecError> {
+    let spec = &mut build.spec;
+    let parents: Vec<Option<LoopId>> = spec.loops.iter().map(|def| def.parent).collect();
+    for (index, parent) in parents.into_iter().enumerate() {
+        match parent {
+            Some(parent) => spec.loops[parent.0].children.push(LoopId(index)),
+            None => spec.roots.push(LoopId(index)),
         }
     }
+    Ok(())
+}
+
+fn compile_segment_section(build: &mut Build) -> Result<(), SpecError> {
+    build.spec.segments = section(&build.spec.source, "segments")
+        .into_iter()
+        .map(|(id, value)| compile_segment(id, value))
+        .collect::<Result<_, _>>()?;
+    Ok(())
+}
+
+fn compile_segment(id: &str, value: &Value) -> Result<(Vec<u8>, SegmentDef), SpecError> {
+    if id.is_empty() {
+        return Err(SpecError::EmptySegmentId {
+            loop_name: None,
+            key: "segments.\"\"".into(),
+        });
+    }
+    let def = RawSegment::deserialize(value).map_err(|e| SpecError::SegmentSchema {
+        segment: id.to_string(),
+        source: e,
+    })?;
+    let elements = compile_elements(id, &def.elements, None)?;
+    Ok((id.as_bytes().to_vec(), SegmentDef { elements }))
+}
+
+fn compile_loop_occurrences(build: &mut Build) -> Result<(), SpecError> {
+    let spec = &mut build.spec;
+    for ((name, def), compiled) in build.defs.iter().zip(spec.loops.iter_mut()) {
+        compiled.occurrences = compile_occurrences(name, &def.occurrences, &spec.segments)?;
+        check_trigger(name, &compiled.occurrences, &compiled.trigger)?;
+        compiled.segments = held_segments(compiled);
+    }
+    Ok(())
+}
+
+fn compile_version_section(build: &mut Build) -> Result<(), SpecError> {
+    build.spec.version = build.version.as_ref().map(compile_version).transpose()?;
+    Ok(())
+}
+
+fn check_trigger_ambiguity(build: &mut Build) -> Result<(), SpecError> {
+    build.spec.check_ambiguity()
+}
+
+fn compile_table_section(build: &mut Build) -> Result<(), SpecError> {
+    let spec = &build.spec;
+    build.spec.tables = compile_tables(spec, section(&spec.source, "tables"))?;
+    Ok(())
+}
+
+fn compile_balancing_section(build: &mut Build) -> Result<(), SpecError> {
+    let spec = &build.spec;
+    build.spec.balancing = compile_balancing(spec, section(&spec.source, "balancing"))?;
+    Ok(())
+}
+
+fn compile_summary_section(build: &mut Build) -> Result<(), SpecError> {
+    let spec = &build.spec;
+    build.spec.summaries = compile_summaries(spec, section(&spec.source, "summaries"))?;
+    Ok(())
+}
+
+fn compile_default_table_section(build: &mut Build) -> Result<(), SpecError> {
+    build.spec.default_table = compile_default_table(&build.spec, build.default_table.take())?;
     Ok(())
 }

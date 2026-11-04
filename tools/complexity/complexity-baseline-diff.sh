@@ -11,7 +11,7 @@ if [ -z "${GITHUB_BASE_REF:-}" ]; then
   echo "complexity-baseline-diff: not a pull request; nothing to compare"
   exit 0
 fi
-if ! git fetch --quiet --no-tags --depth=1 origin \
+if ! git fetch --quiet --no-tags origin \
   "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"; then
   echo "complexity-baseline-diff: could not fetch $GITHUB_BASE_REF from origin; nothing compared"
   exit 0
@@ -22,4 +22,4 @@ if ! git show "origin/$GITHUB_BASE_REF:$baseline" > "$old" 2>/dev/null; then
   echo "complexity-baseline-diff: origin/$GITHUB_BASE_REF has no $baseline; nothing to compare"
   exit 0
 fi
-python3 .github/scripts/complexity.py "$baseline" --compare-with "$old"
+python3 tools/complexity/complexity.py "$baseline" --compare-with "$old"

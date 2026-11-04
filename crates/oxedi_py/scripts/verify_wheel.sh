@@ -23,20 +23,16 @@ python -m venv "$work/venv"
 py="$work/venv/bin/python"
 [ -x "$py" ] || py="$work/venv/Scripts/python.exe"
 
-# The test extra of the wheel's own metadata, minus VERIFY_EXCLUDE.
-requirements="$("$py" - "$wheel" "${VERIFY_EXCLUDE:-}" <<'PY'
-import re, sys, zipfile
-from email.parser import BytesParser
+# The pyproject's test dependency group, minus VERIFY_EXCLUDE.
+requirements="$("$py" - "$repo/crates/oxedi_py/pyproject.toml" "${VERIFY_EXCLUDE:-}" <<'PY'
+import re, sys, tomllib
 
-wheel, excluded = sys.argv[1], sys.argv[2].split()
-with zipfile.ZipFile(wheel) as zf:
-    name = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
-    headers = BytesParser().parsebytes(zf.read(name), headersonly=True)
-for line in headers.get_all("Requires-Dist") or []:
-    spec, _, marker = line.partition(";")
-    if re.search(r"extra\s*==\s*['\"]test['\"]", marker):
-        if re.match(r"[A-Za-z0-9._-]+", spec.strip()).group(0).lower() not in excluded:
-            print(spec.replace(" ", ""))
+pyproject, excluded = sys.argv[1], sys.argv[2].split()
+with open(pyproject, "rb") as f:
+    group = tomllib.load(f)["dependency-groups"]["test"]
+for spec in group:
+    if re.match(r"[A-Za-z0-9._-]+", spec.strip()).group(0).lower() not in excluded:
+        print(spec.replace(" ", ""))
 PY
 )"
 "$py" -m pip install --quiet "$wheel" $requirements

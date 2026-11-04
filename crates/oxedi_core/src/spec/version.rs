@@ -123,6 +123,64 @@ enum Reading {
     Missed,
 }
 
+impl Reading {
+    /// Where a candidate starts: open when it declares a version.
+    fn start(spec: &Spec) -> Reading {
+        match spec.version {
+            Some(_) => Reading::Open,
+            None => Reading::Missed,
+        }
+    }
+
+    /// The reading after `segment`: an open candidate settles when the
+    /// segment is the one its declaration names.
+    fn after(self, spec: &Spec, segment: &Segment<'_>) -> Reading {
+        let found = spec.version.as_ref().and_then(|v| v.matches(segment));
+        match (self, found) {
+            (Reading::Open, Some(true)) => Reading::Matched,
+            (Reading::Open, Some(false)) => Reading::Missed,
+            (reading, _) => reading,
+        }
+    }
+}
+
+/// The choice once every candidate before the first unmissed one has
+/// missed: that one wins if it matched (`Some(Some(at))`), and none left
+/// means no choice (`Some(None)`); `None` while it is still open.
+fn settled(readings: &[Reading]) -> Option<Option<usize>> {
+    match readings
+        .iter()
+        .enumerate()
+        .find(|(_, reading)| **reading != Reading::Missed)
+    {
+        None => Some(None),
+        Some((at, Reading::Matched)) => Some(Some(at)),
+        Some(_) => None,
+    }
+}
+
+/// The position of the first of `candidates` whose declared version the
+/// `segments` carry; `None` when none does. Segments are read only until the
+/// choice is settled.
+pub(super) fn chosen<'s>(
+    candidates: &[&Spec],
+    segments: impl IntoIterator<Item = Segment<'s>>,
+) -> Option<usize> {
+    let mut readings: Vec<Reading> = candidates.iter().map(|spec| Reading::start(spec)).collect();
+    let mut segments = segments.into_iter();
+    loop {
+        if let Some(choice) = settled(&readings) {
+            return choice;
+        }
+        let Some(segment) = segments.next() else {
+            return readings.iter().position(|&r| r == Reading::Matched);
+        };
+        for (reading, spec) in readings.iter_mut().zip(candidates) {
+            *reading = reading.after(spec, &segment);
+        }
+    }
+}
+
 impl Spec {
     /// The first of `candidates` whose declared version the document's
     /// `segments` carry, or `default` when none does.
@@ -136,45 +194,7 @@ impl Spec {
         default: &'a Spec,
         segments: impl IntoIterator<Item = Segment<'s>>,
     ) -> &'a Spec {
-        let mut readings: Vec<Reading> = candidates
-            .iter()
-            .map(|spec| match spec.version {
-                Some(_) => Reading::Open,
-                None => Reading::Missed,
-            })
-            .collect();
-        // Settled once every candidate before the first unmissed one has
-        // missed: that one wins if it matched, and none left means the default.
-        let settled = |readings: &[Reading]| match readings
-            .iter()
-            .enumerate()
-            .find(|(_, r)| **r != Reading::Missed)
-        {
-            None => Some(None),
-            Some((at, Reading::Matched)) => Some(Some(at)),
-            Some(_) => None,
-        };
-        let mut segments = segments.into_iter();
-        let chosen = loop {
-            if let Some(chosen) = settled(&readings) {
-                break chosen;
-            }
-            let Some(segment) = segments.next() else {
-                break readings.iter().position(|&r| r == Reading::Matched);
-            };
-            for (reading, spec) in readings.iter_mut().zip(candidates) {
-                if *reading != Reading::Open {
-                    continue;
-                }
-                let found = spec.version.as_ref().and_then(|v| v.matches(&segment));
-                match found {
-                    Some(true) => *reading = Reading::Matched,
-                    Some(false) => *reading = Reading::Missed,
-                    None => {}
-                }
-            }
-        };
-        chosen
+        chosen(candidates, segments)
             .and_then(|at| candidates.get(at).copied())
             .unwrap_or(default)
     }

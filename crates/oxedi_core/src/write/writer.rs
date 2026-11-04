@@ -154,7 +154,7 @@ fn read_back(
         Err(_) if !findings.is_empty() => return Ok(()),
         Err(error) => return Err(WriteError::Unreadable(error)),
     };
-    let (_, diagnostics) = Processor::run(spec, &document);
+    let (_, diagnostics) = Processor::run(spec, &document, None);
     let names = |table: usize, column: Option<usize>| match column {
         None => data
             .get(table)

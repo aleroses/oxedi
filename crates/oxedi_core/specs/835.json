@@ -585,5 +585,27 @@
         {"occurrence": "provider_adjustment", "elements": [4, 6, 8, 10, 12, 14], "sign": "-"}
       ]
     }
-  }
+  },
+  "summaries": {
+    "count_claims": {"count": {"table": "claims"}},
+    "count_patients": {"distinct": {"table": "claims", "column": "patient_id"}},
+    "sum_payments": {"sum": {"table": "payments", "column": "total_payment_amount"}},
+    "payer": {"row": {"table": "payments", "fields": [
+      {"name": "name", "column": "payer_name"},
+      {"name": "identification_code", "column": "payer_id"},
+      {"name": "address", "column": "payer_address"},
+      {"name": "city", "column": "payer_city"},
+      {"name": "state", "column": "payer_state"},
+      {"name": "zip_code", "column": "payer_zip"}
+    ]}},
+    "payee": {"row": {"table": "payments", "fields": [
+      {"name": "name", "column": "payee_name"},
+      {"name": "identification_code", "column": "payee_id"},
+      {"name": "address", "column": "payee_address"},
+      {"name": "city", "column": "payee_city"},
+      {"name": "state", "column": "payee_state"},
+      {"name": "zip_code", "column": "payee_zip"}
+    ]}}
+  },
+  "default_table": "claims"
 }

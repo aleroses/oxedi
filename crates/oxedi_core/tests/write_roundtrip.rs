@@ -72,7 +72,7 @@ fn differences(before: &Tables, after: &Tables) -> Vec<String> {
 
 fn read(spec: &Spec, bytes: &[u8]) -> (Tables, Vec<String>) {
     let document = Document::parse(bytes).expect("the written file has an ISA");
-    let (tables, diagnostics) = Processor::run(spec, &document);
+    let (tables, diagnostics) = Processor::run(spec, &document, None);
     (
         tables,
         diagnostics.iter().map(ToString::to_string).collect(),
@@ -88,7 +88,7 @@ fn clean_files_write_back_to_the_same_tables() {
         }
         let spec = common::select(&five, &four, &bytes, delims);
         let document = Document::with_delimiters(&bytes[..], delims).unwrap();
-        let (tables, diagnostics) = Processor::run(spec, &document);
+        let (tables, diagnostics) = Processor::run(spec, &document, None);
         assert!(diagnostics.is_empty(), "{name} reads clean");
         let written = match write(spec, &tables, &envelope()) {
             Ok(written) => written,
@@ -111,7 +111,7 @@ fn files_with_findings_write_only_when_allowed() {
         }
         let spec = common::select(&five, &four, &bytes, delims);
         let document = Document::with_delimiters(&bytes[..], delims).unwrap();
-        let (tables, _) = Processor::run(spec, &document);
+        let (tables, _) = Processor::run(spec, &document, None);
         let (written, findings) = write_with_findings(spec, &tables, &envelope()).unwrap();
         assert!(!findings.is_empty(), "{name}");
         match write(spec, &tables, &envelope()) {

@@ -2,7 +2,8 @@
 
 use std::fmt;
 
-use super::{Cell, CellError, ColumnData, ColumnType};
+use super::{Cell, CellError, ColumnData};
+use crate::value::ColumnType;
 
 /// Why a row could not be appended to a table.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -96,6 +96,13 @@ impl<'a> Segment<'a> {
         }
     }
 
+    /// The bytes of one component of an element, as written. `element` and
+    /// `component` are 1-based; component 1 of a simple element is the
+    /// element itself. `None` when the segment does not have that place.
+    pub fn component(&self, element: usize, component: usize) -> Option<&[u8]> {
+        self.leaf(element, Some(component))
+    }
+
     /// The whole text of an element: a composite's components are written
     /// back into `joined` with `separator` between them. `None` when the
     /// segment does not have the element.

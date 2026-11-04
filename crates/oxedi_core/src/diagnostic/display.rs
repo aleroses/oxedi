@@ -1,40 +1,15 @@
 //! The `Display` text of every rule, one sentence naming the element, its
-//! name and the offending value.
+//! name and the offending value, written in one `write!` per rule over the
+//! pieces of `text.rs`.
 
 use std::fmt;
 
+use super::text::{
+    CodeCount, Cut, ElementRef, InOccurrence, MAX_LISTED_SEGMENTS, OfSegment, OffBy, OpenedAt,
+    Opener, Parent, Reporter, ShortList, debug_name, quoted_code, segment_index,
+};
 use super::{Quoted, Rule};
-use crate::spec::render_amount;
-
-/// The longest code or name list a message spells out; longer lists keep
-/// the count.
-const MAX_LISTED_CODES: usize = 5;
-
-/// The most segment indexes a balancing message spells out; a longer list
-/// ends with the count of the rest.
-const MAX_LISTED_SEGMENTS: usize = 10;
-
-/// An element reference in X12 style: `CLP01`, or `SVC01-2` for a component.
-struct ElementRef<'a> {
-    segment_id: &'a [u8],
-    element: usize,
-    component: Option<usize>,
-}
-
-impl fmt::Display for ElementRef<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}{:02}",
-            String::from_utf8_lossy(self.segment_id),
-            self.element
-        )?;
-        match self.component {
-            Some(component) => write!(f, "-{component}"),
-            None => Ok(()),
-        }
-    }
-}
+use crate::value::{LengthRange, decimal_display};
 
 impl fmt::Display for Rule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -61,13 +36,12 @@ impl fmt::Display for Rule {
                 loop_name,
                 expected_end,
                 opened_at,
-            } => {
-                write!(f, "loop {loop_name:?} ")?;
-                if let Some(opened_at) = opened_at {
-                    write!(f, "opened at segment #{opened_at} ")?;
-                }
-                write!(f, "closed without its end segment {}", Quoted(expected_end))
-            }
+            } => write!(
+                f,
+                "loop {loop_name:?} {}closed without its end segment {}",
+                OpenedAt(*opened_at),
+                Quoted(expected_end)
+            ),
             Rule::ControlCountMismatch {
                 segment_id,
                 element,
@@ -76,11 +50,7 @@ impl fmt::Display for Rule {
             } => write!(
                 f,
                 "{} declares {} but the count is {expected}",
-                ElementRef {
-                    segment_id,
-                    element: *element,
-                    component: None
-                },
+                ElementRef::simple(segment_id, *element),
                 Quoted(found)
             ),
             Rule::ControlElementMissing {
@@ -89,11 +59,7 @@ impl fmt::Display for Rule {
             } => write!(
                 f,
                 "control element {} is missing: the segment has no element {element}",
-                ElementRef {
-                    segment_id,
-                    element: *element,
-                    component: None
-                }
+                ElementRef::simple(segment_id, *element)
             ),
             Rule::ControlNumberMismatch {
                 opener,
@@ -103,28 +69,15 @@ impl fmt::Display for Rule {
                 opener_value,
                 closer_value,
                 opened_at,
-            } => {
-                write!(
-                    f,
-                    "{} {} does not match {} {}",
-                    ElementRef {
-                        segment_id: closer,
-                        element: *closer_element,
-                        component: None
-                    },
-                    Quoted(closer_value),
-                    ElementRef {
-                        segment_id: opener,
-                        element: *opener_element,
-                        component: None
-                    },
-                    Quoted(opener_value)
-                )?;
-                match opened_at {
-                    Some(opened_at) => write!(f, " of segment #{opened_at}"),
-                    None => Ok(()),
-                }
-            }
+            } => write!(
+                f,
+                "{} {} does not match {} {}{}",
+                ElementRef::simple(closer, *closer_element),
+                Quoted(closer_value),
+                ElementRef::simple(opener, *opener_element),
+                Quoted(opener_value),
+                OfSegment(*opened_at)
+            ),
             Rule::RequiredElementMissing {
                 segment_id,
                 element,
@@ -133,11 +86,7 @@ impl fmt::Display for Rule {
             } => write!(
                 f,
                 "required element {} ({name}) is missing or empty",
-                ElementRef {
-                    segment_id,
-                    element: *element,
-                    component: *component
-                }
+                ElementRef::new(segment_id, *element, *component)
             ),
             Rule::TypeMismatch {
                 segment_id,
@@ -148,11 +97,7 @@ impl fmt::Display for Rule {
             } => write!(
                 f,
                 "element {} ({name}) is not a valid {expected}",
-                ElementRef {
-                    segment_id,
-                    element: *element,
-                    component: *component
-                }
+                ElementRef::new(segment_id, *element, *component)
             ),
             Rule::LengthOutOfRange {
                 segment_id,
@@ -162,23 +107,15 @@ impl fmt::Display for Rule {
                 min,
                 max,
                 length,
-            } => {
-                write!(
-                    f,
-                    "element {} ({name}) has length {length}; the spec allows ",
-                    ElementRef {
-                        segment_id,
-                        element: *element,
-                        component: *component
-                    }
-                )?;
-                match (min, max) {
-                    (Some(min), Some(max)) => write!(f, "{min} to {max}"),
-                    (Some(min), None) => write!(f, "at least {min}"),
-                    (None, Some(max)) => write!(f, "at most {max}"),
-                    (None, None) => write!(f, "any length"),
+            } => write!(
+                f,
+                "element {} ({name}) has length {length}; the spec allows {}",
+                ElementRef::new(segment_id, *element, *component),
+                LengthRange {
+                    min: *min,
+                    max: *max
                 }
-            }
+            ),
             Rule::ValueDropped {
                 table,
                 column,
@@ -197,11 +134,7 @@ impl fmt::Display for Rule {
             } => write!(
                 f,
                 "element {} ({name}) has {found} components; the spec declares {declared}",
-                ElementRef {
-                    segment_id,
-                    element: *element,
-                    component: None
-                }
+                ElementRef::simple(segment_id, *element)
             ),
             Rule::CodeNotInList {
                 segment_id,
@@ -210,51 +143,27 @@ impl fmt::Display for Rule {
                 name,
                 codes,
                 occurrence,
-            } => {
-                let at = ElementRef {
-                    segment_id,
-                    element: *element,
-                    component: *component,
-                };
-                let listed = if codes.len() <= MAX_LISTED_CODES {
-                    let quoted: Vec<String> = codes
-                        .iter()
-                        .map(|c| Quoted(c.as_bytes()).to_string())
-                        .collect();
-                    format!(" ({})", quoted.join(", "))
-                } else {
-                    String::new()
-                };
-                let own = occurrence
-                    .as_ref()
-                    .map(|occurrence| format!(" in occurrence {occurrence:?}"))
-                    .unwrap_or_default();
-                match codes.len() {
-                    1 => write!(
-                        f,
-                        "element {at} ({name}) is not the one code the spec lists for it{own}{listed}"
-                    ),
-                    count => write!(
-                        f,
-                        "element {at} ({name}) is not one of the {count} codes the spec lists for it{own}{listed}"
-                    ),
+            } => write!(
+                f,
+                "element {} ({name}) is not {} the spec lists for it{}{}",
+                ElementRef::new(segment_id, *element, *component),
+                CodeCount(codes.len()),
+                InOccurrence(occurrence.as_ref()),
+                ShortList {
+                    items: codes,
+                    item: quoted_code
                 }
-            }
+            ),
             Rule::RequiredOccurrenceMissing {
                 loop_name,
                 opened_at,
                 occurrence,
                 selector,
-            } => {
-                write!(f, "loop {loop_name:?} ")?;
-                if let Some(opened_at) = opened_at {
-                    write!(f, "opened at segment #{opened_at} ")?;
-                }
-                write!(
-                    f,
-                    "closed without its required occurrence {occurrence:?} ({selector})"
-                )
-            }
+            } => write!(
+                f,
+                "loop {loop_name:?} {}closed without its required occurrence {occurrence:?} ({selector})",
+                OpenedAt(*opened_at)
+            ),
             Rule::OccurrenceOverMax {
                 loop_name,
                 occurrence,
@@ -270,14 +179,11 @@ impl fmt::Display for Rule {
                 parent,
                 max,
                 count,
-            } => {
-                write!(f, "loop {loop_name:?} has {count} instances ")?;
-                match parent {
-                    Some(parent) => write!(f, "under one instance of loop {parent:?}")?,
-                    None => write!(f, "at the root")?,
-                }
-                write!(f, "; the spec allows at most {max}")
-            }
+            } => write!(
+                f,
+                "loop {loop_name:?} has {count} instances {}; the spec allows at most {max}",
+                Parent(parent.as_ref())
+            ),
             Rule::OutOfOrder {
                 loop_name,
                 occurrence,
@@ -295,41 +201,27 @@ impl fmt::Display for Rule {
                 element,
                 component,
                 occurrences,
-            } => {
-                let at = ElementRef {
-                    segment_id,
-                    element: *element,
-                    component: *component,
-                };
-                let listed = if occurrences.len() <= MAX_LISTED_CODES {
-                    let quoted: Vec<String> =
-                        occurrences.iter().map(|name| format!("{name:?}")).collect();
-                    format!(" ({})", quoted.join(", "))
-                } else {
-                    String::new()
-                };
-                write!(
-                    f,
-                    "segment {} matches none of the {} occurrences loop {loop_name:?} declares for it{listed}: {at} holds none of their qualifier codes",
-                    Quoted(segment_id),
-                    occurrences.len()
-                )
-            }
+            } => write!(
+                f,
+                "segment {} matches none of the {} occurrences loop {loop_name:?} declares for it{}: {} holds none of their qualifier codes",
+                Quoted(segment_id),
+                occurrences.len(),
+                ShortList {
+                    items: occurrences,
+                    item: debug_name
+                },
+                ElementRef::new(segment_id, *element, *component)
+            ),
             Rule::RequiredLoopMissing {
                 loop_name,
                 opened_at,
                 child,
                 expected_trigger,
-            } => {
-                write!(f, "loop {loop_name:?} ")?;
-                if let Some(opened_at) = opened_at {
-                    write!(f, "opened at segment #{opened_at} ")?;
-                }
-                write!(
-                    f,
-                    "closed without its required child loop {child:?} (trigger {expected_trigger})"
-                )
-            }
+            } => write!(
+                f,
+                "loop {loop_name:?} {}closed without its required child loop {child:?} (trigger {expected_trigger})",
+                OpenedAt(*opened_at)
+            ),
             Rule::BalanceMismatch {
                 rule,
                 loop_name,
@@ -340,44 +232,36 @@ impl fmt::Display for Rule {
                 computed,
                 scale,
                 segments,
-            } => {
-                write!(f, "balancing rule {rule:?} fails in loop {loop_name:?} ")?;
-                match opened_at {
-                    Some(opened_at) => write!(f, "opened at segment #{opened_at}")?,
-                    None => write!(f, "opened implicitly")?,
+            } => write!(
+                f,
+                "balancing rule {rule:?} fails in loop {loop_name:?} {}: {target} is {}, but {sum} adds up to {}{}; read from segments {}",
+                Opener(*opened_at),
+                decimal_display(*expected, *scale),
+                decimal_display(*computed, *scale),
+                OffBy {
+                    expected: *expected,
+                    computed: *computed,
+                    scale: *scale
+                },
+                Cut {
+                    items: segments,
+                    limit: MAX_LISTED_SEGMENTS,
+                    item: segment_index
                 }
-                let difference = expected.checked_sub(*computed);
-                write!(
-                    f,
-                    ": {target} is {}, but {sum} adds up to {}",
-                    render_amount(*expected, *scale),
-                    render_amount(*computed, *scale),
-                )?;
-                if let Some(difference) = difference {
-                    write!(f, " (off by {})", render_amount(difference, *scale))?;
-                }
-                write!(f, "; read from segments ")?;
-                for (i, segment) in segments.iter().take(MAX_LISTED_SEGMENTS).enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "#{segment}")?;
-                }
-                let rest = segments.len().saturating_sub(MAX_LISTED_SEGMENTS);
-                if rest > 0 {
-                    write!(f, " and {rest} more")?;
-                }
-                Ok(())
-            }
+            ),
             Rule::External {
                 origin,
                 code,
                 message,
                 ..
-            } => match code {
-                Some(code) => write!(f, "{message} (reported by {origin}, code {code})"),
-                None => write!(f, "{message} (reported by {origin})"),
-            },
+            } => write!(
+                f,
+                "{message} {}",
+                Reporter {
+                    origin,
+                    code: code.as_deref()
+                }
+            ),
         }
     }
 }

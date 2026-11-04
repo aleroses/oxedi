@@ -10,7 +10,7 @@ use super::occurrence_error::{OccurrenceError, place};
 use super::raw::{RawOccurrence, RawQualifier};
 use super::render::{render_key, render_trigger};
 use super::segments::{
-    ElementDef, ElementDefError, ElementType, SegmentDef, compile_codes, parse_position,
+    ElementDef, ElementDefError, SegmentDef, compile_codes, holds_code, parse_position,
 };
 use crate::segment::Segment;
 
@@ -43,11 +43,7 @@ impl Qualifier {
     pub fn matches(&self, segment: &Segment<'_>) -> bool {
         segment
             .leaf(self.element, self.component)
-            .is_some_and(|value| {
-                self.codes
-                    .binary_search_by(|code| code.as_bytes().cmp(value))
-                    .is_ok()
-            })
+            .is_some_and(|value| holds_code(&self.codes, value))
     }
 }
 
@@ -101,25 +97,14 @@ impl OccurrenceDef {
         };
         qualifier.component.is_none()
             && trigger.conditions.iter().any(|(position, value)| {
-                *position == qualifier.element
-                    && qualifier.codes.iter().any(|code| code.as_bytes() == value)
+                *position == qualifier.element && holds_code(&qualifier.codes, value)
             })
     }
 }
 
-/// The type code of an element type, as a spec writes it.
-pub(super) fn type_code(kind: ElementType) -> String {
-    match kind {
-        ElementType::An => "AN".into(),
-        ElementType::Id => "ID".into(),
-        ElementType::N(places) => format!("N{places}"),
-        ElementType::R { .. } => "R".into(),
-        ElementType::Dt => "DT".into(),
-        ElementType::Tm => "TM".into(),
-    }
-}
-
-/// The definition of an element or component of `segment`, if any.
+/// The definition of an element or component of `segment`, if any. It takes
+/// the `segments` section rather than a [`Spec`](super::Spec) because it also
+/// runs while the spec is being built; [`Spec::element_def`](super::Spec::element_def) calls it.
 pub(super) fn element_def<'d>(
     segments: &'d BTreeMap<Vec<u8>, SegmentDef>,
     segment: &[u8],
@@ -136,15 +121,7 @@ pub(super) fn element_def<'d>(
 /// Validates a code list against the element it is for, with the checks an
 /// element's own `codes` gets, and returns it sorted by bytes.
 fn element_codes(def: &ElementDef, codes: &[String]) -> Result<Vec<String>, ElementDefError> {
-    if !def.composite.is_empty() {
-        return Err(ElementDefError::CodesOnComposite);
-    }
-    if matches!(def.kind, ElementType::N(_) | ElementType::R { .. }) {
-        return Err(ElementDefError::CodesOnNumeric {
-            kind: type_code(def.kind),
-        });
-    }
-    compile_codes(codes, def.kind, def.min, def.max)
+    compile_codes(codes, def.kind, def.min, def.max, !def.composite.is_empty())
 }
 
 /// Reads a `codes` key: `<element>` or `<element>-<component>`.

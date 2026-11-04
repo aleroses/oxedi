@@ -26,10 +26,12 @@ __all__ = [
     "Stream",
     "Table",
     "Tables",
+    "Version",
     "WriteFinding",
     "_external_diagnostic",
     "_loop_paths",
     "_mask_findings",
+    "_parse_document",
     "_write",
     "parse",
     "stream",
@@ -107,8 +109,8 @@ class Diagnostic:
     @property
     def origin(self) -> builtins.str:
         r"""
-        Who reported the finding: `"oxedi"` for the parser's own rules, the
-        validator's name for an external finding.
+        Who reported the diagnostic: `"oxedi"` for the parser's own rules,
+        the validator's name for an external one.
         """
     @property
     def code(self) -> typing.Optional[builtins.str]:
@@ -134,12 +136,12 @@ class Diagnostic:
     @property
     def element(self) -> typing.Optional[builtins.int]:
         r"""
-        The 1-based element position, when the finding has one.
+        The 1-based element position, when the diagnostic has one.
         """
     @property
     def component(self) -> typing.Optional[builtins.int]:
         r"""
-        The 1-based component position, when the finding has one.
+        The 1-based component position, when the diagnostic has one.
         """
     @property
     def path(self) -> builtins.str:
@@ -178,6 +180,21 @@ class Envelope:
     Who sends and receives an interchange, when, its first control number
     and its delimiters. The writer derives the rest of the envelope: counts,
     later control numbers, codes and fixed widths.
+    """
+    DEFAULT_QUALIFIER: builtins.str
+    r"""
+    The qualifier of a sender or receiver id when none is given, the
+    default of `sender_qualifier` and `receiver_qualifier`.
+    """
+    DEFAULT_USAGE_INDICATOR: builtins.str
+    r"""
+    The usage indicator when none is given, the default of
+    `usage_indicator`: production data.
+    """
+    DEFAULT_CONTROL_NUMBER: builtins.int
+    r"""
+    The first control number when none is given, the default of
+    `control_number`.
     """
     @property
     def sender_id(self) -> builtins.str:
@@ -239,7 +256,7 @@ class Envelope:
         r"""
         The delimiters written.
         """
-    def __new__(cls, *, sender_id: builtins.str, receiver_id: builtins.str, date: datetime.date, time: datetime.time, sender_qualifier: builtins.str = "ZZ", receiver_qualifier: builtins.str = "ZZ", usage_indicator: builtins.str = "P", control_number: builtins.int = 1, application_sender: typing.Optional[builtins.str] = None, application_receiver: typing.Optional[builtins.str] = None, delimiters: typing.Optional[Delimiters] = None, line_break: builtins.bool = False) -> Envelope:
+    def __new__(cls, *, sender_id: builtins.str, receiver_id: builtins.str, date: datetime.date, time: datetime.time, sender_qualifier: builtins.str = 'ZZ', receiver_qualifier: builtins.str = 'ZZ', usage_indicator: builtins.str = 'P', control_number: builtins.int = 1, application_sender: typing.Optional[builtins.str] = None, application_receiver: typing.Optional[builtins.str] = None, delimiters: typing.Optional[Delimiters] = None, line_break: builtins.bool = False) -> Envelope:
         r"""
         `date` (a `datetime.date`) and `time` (a `datetime.time` without a
         time zone, whole seconds) stamp the interchange and the group: the
@@ -297,29 +314,34 @@ class Result:
     @property
     def payer(self) -> builtins.dict[builtins.str, builtins.str | None] | None:
         r"""
-        The payer organization from the `payer_*` columns of `payments`, or
-        `None` when the file has none.
+        The summary `payer` the spec declares (for the built-in 835: the
+        payer organization of the one transaction), or `None` when the file
+        has none.
         """
     @property
     def payee(self) -> builtins.dict[builtins.str, builtins.str | None] | None:
         r"""
-        The payee organization from the `payee_*` columns of `payments`, or
-        `None` when the file has none.
+        The summary `payee` the spec declares (for the built-in 835: the
+        payee organization of the one transaction), or `None` when the file
+        has none.
         """
     def count_claims(self) -> builtins.int:
         r"""
-        The rows of `claims`.
+        The summary `count_claims` the spec declares (for the built-in 835:
+        the number of claims).
         """
     def count_patients(self) -> builtins.int:
         r"""
-        The distinct non-null values of `claims.patient_id`. Ids are text:
+        The summary `count_patients` the spec declares (for the built-in 835:
+        the distinct patient ids of the claims). Values are compared as text:
         `0123` and `123` are two patients, where edi-835-parser reads both as
         the number 123 and counts one.
         """
     def sum_payments(self) -> decimal.Decimal:
         r"""
-        The sum of `payments.total_payment_amount`, as a `Decimal` at the
-        column's scale.
+        The summary `sum_payments` the spec declares (for the built-in 835:
+        the sum of the transactions' total payment amounts), as a `Decimal`
+        at the column's scale.
         """
     def __repr__(self) -> builtins.str: ...
 
@@ -355,6 +377,20 @@ class Segment:
         The segment's byte range in the input, `(start, end)` with `end`
         exclusive: leading trivia, body and terminator, as `raw` holds them.
         """
+    def element(self, position: int, component: typing.Optional[int] = None) -> builtins.bytes | builtins.list[builtins.bytes] | None:
+        r"""
+        The element at the 1-based `position` (`XX01` is 1), or one of its
+        components: as `elements` holds it without `component` (`bytes` for
+        a simple element, a list of `bytes` for a composite one), and the
+        bytes of that 1-based component with it (component 1 of a simple
+        element is the element). `None` when the segment has no such place.
+        """
+    def has(self, position: int, component: typing.Optional[int] = None) -> builtins.bool:
+        r"""
+        Whether the segment has the element at the 1-based `position`, or
+        that 1-based `component` of it, even when it is empty: `element(...)`
+        is not `None`.
+        """
     def __repr__(self) -> builtins.str: ...
 
 @typing.final
@@ -362,11 +398,15 @@ class Spec:
     r"""
     The loop structure, element definitions and tables of a file format.
     """
+    DEFAULT_VERSION: Version
+    r"""
+    The version of the default built-in spec.
+    """
     @staticmethod
-    def builtin(version: builtins.str = "5010") -> Spec:
+    def builtin(version: Version = Version.V5010) -> Spec:
         r"""
-        The built-in 835 spec of `version`, `"5010"` (the default) or
-        `"4010"`; raises `ValueError` for any other version.
+        The built-in spec of `version`; it defaults to `Spec.DEFAULT_VERSION`.
+        Raises `ValueError` for a version no built-in covers.
         """
     @staticmethod
     def from_json(json: builtins.str) -> Spec:
@@ -495,6 +535,34 @@ class Tables:
     def __getitem__(self, name: builtins.str, /) -> Table: ...
 
 @typing.final
+class Version:
+    r"""
+    An X12 release a built-in spec covers.
+    """
+    V5010: Version
+    r"""
+    Release 5010.
+    """
+    V4010: Version
+    r"""
+    Release 4010.
+    """
+    @property
+    def text(self) -> builtins.str:
+        r"""
+        The release number as text.
+        """
+    def __eq__(self, other: builtins.object, /) -> builtins.bool: ...
+    def __hash__(self) -> builtins.int: ...
+    def __str__(self) -> builtins.str: ...
+    def __repr__(self) -> builtins.str: ...
+    @staticmethod
+    def all() -> builtins.list[Version]:
+        r"""
+        Every version a built-in spec covers, the default first.
+        """
+
+@typing.final
 class WriteFinding:
     r"""
     One reason tables do not make a valid file. A value, never raised.
@@ -542,7 +610,7 @@ def _external_diagnostic(origin: builtins.str, message: builtins.str, level: bui
     Builds a `Diagnostic` for a finding reported by an external validator; internal.
     """
 
-def _loop_paths(result: Result, segments: typing.Sequence[builtins.int]) -> builtins.list[builtins.list[tuple[builtins.str, builtins.int]]]:
+def _loop_paths(document: Document, spec: Spec, segments: typing.Sequence[builtins.int]) -> builtins.list[builtins.list[tuple[builtins.str, builtins.int]]]:
     r"""
     The open loops at each of `segments`, outermost first, as `(name,
     ordinal)` pairs: the loops `parse` names in the `path` of a diagnostic
@@ -567,6 +635,18 @@ def _mask_findings(diagnostics: typing.Sequence[Diagnostic], document: Document,
     
     Internal: adapters to external validators call it; it is not part of the
     public API.
+    """
+
+def _parse_document(data: typing_extensions.Buffer, spec: typing.Optional[Spec] = None) -> tuple[Document, Spec, builtins.int]:
+    r"""
+    Indexes a whole file without running the loop engine or the projector:
+    the document, the spec a `parse` of the same arguments uses (the one
+    given, or the built-in of the version the file declares) and how many
+    bytes precede the first segment's text (the byte order mark and the
+    whitespace before the ISA).
+    
+    Internal: adapters to external validators read a file's document and
+    spec through it without paying for the tables.
     """
 
 def _write(tables: Tables | collections.abc.Mapping[builtins.str, typing.Any], envelope: Envelope, spec: typing.Optional[Spec] = None, allow_findings: builtins.bool = False) -> tuple[bytes, builtins.list[WriteFinding]]:

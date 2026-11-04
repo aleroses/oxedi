@@ -1,7 +1,7 @@
 # Ceilings for the size and complexity lints enabled in [workspace.lints.clippy]. Each is the
 # largest value any function in the workspace (tests included) has today, so nothing may grow
 # past it; lower a ceiling when a refactor brings the largest function down. The per-function
-# ratchet towards the long-term targets is .github/scripts/complexity.sh.
+# ratchet towards the long-term targets is tools/complexity/complexity.sh.
 # The toolchain follows stable, and a new clippy can score the same code differently
 # (cognitive_complexity is a nursery lint), so a toolchain bump may need these re-measured.
 cognitive-complexity-threshold = 18

@@ -1,0 +1,40 @@
+# cargo-deny policy for the PR audit. It is not in the image: the audit container gets it from
+# the host checkout, read-only, so a pull request cannot change the rules it is judged by.
+
+[advisories]
+# The advisory database is written only by the audit step that has the network.
+db-path = "/sandbox/advisory"
+yanked = "deny"
+# Reviewed exceptions: each crate below cannot move to a fixed release without a new dependency or
+# a new major version of the one that pulls it in. Remove an entry once that crate releases a fix.
+ignore = [
+  # quick-xml 0.26 comes from pprof 0.15 (its latest) through inferno 0.11: a development
+  # dependency of oxedi_core that only the benches use, writing flamegraphs of the project's own
+  # runs. It never reads untrusted XML and reaches no published artifact.
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml via pprof, benches only; no pprof release moves it" },
+  { id = "RUSTSEC-2026-0195", reason = "quick-xml via pprof, benches only; no pprof release moves it" },
+  # zip 6 is a build-dependency of libduckdb-sys, pinned to the DuckDB release the extension is
+  # built for; the next libduckdb-sys is DuckDB 2.0. The build extracts no archive from input.
+  { id = "RUSTSEC-2026-0367", reason = "zip in libduckdb-sys's build; pinned to the extension's DuckDB" },
+  { id = "RUSTSEC-2026-0368", reason = "zip in libduckdb-sys's build; pinned to the extension's DuckDB" },
+  { id = "RUSTSEC-2026-0369", reason = "zip in libduckdb-sys's build; pinned to the extension's DuckDB" },
+  # The unic-* crates come from rustpython-parser through pyo3-stub-gen 0.23.1 (its latest): the
+  # stub generator, which parses the project's own type annotations. Unmaintained, no advisory of
+  # a flaw, and no maintained release to move to.
+  { id = "RUSTSEC-2025-0075", reason = "unic-char-range via pyo3-stub-gen; no release without it" },
+  { id = "RUSTSEC-2025-0080", reason = "unic-common via pyo3-stub-gen; no release without it" },
+  { id = "RUSTSEC-2025-0081", reason = "unic-char-property via pyo3-stub-gen; no release without it" },
+  { id = "RUSTSEC-2025-0090", reason = "unic-emoji-char via pyo3-stub-gen; no release without it" },
+  { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version via pyo3-stub-gen; no release without it" },
+  { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident via pyo3-stub-gen; no release without it" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[bans]
+multiple-versions = "warn"
+
+# Licenses are not checked: the project has no license policy yet.

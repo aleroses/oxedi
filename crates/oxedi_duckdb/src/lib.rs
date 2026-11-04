@@ -3,14 +3,16 @@
 //! It registers two table functions and a copy format. The first:
 //!
 //! ```sql
-//! read_835(path, table_name := 'claims', filename := false, version := NULL,
+//! read_835(path, table_name := <the spec's default table>, filename := false, version := NULL,
 //!          binary := false, ignore_errors := false)
 //! ```
 //!
 //! `path` is a path, a glob pattern or a list of them, opened through
 //! DuckDB's file system. Each file is parsed with the built-in spec of the
 //! version it declares (or `version`), and the rows of one projected table
-//! are returned with the column types the core declares.
+//! are returned with the column types the core declares. Without
+//! `table_name`, the table is the one the spec declares as its
+//! `default_table`.
 //!
 //! `table_name := 'diagnostics'` returns the core's findings instead, one
 //! row per finding (`level`, `kind`, `rule`, `segment`, `element`,

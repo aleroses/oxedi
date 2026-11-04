@@ -2,30 +2,18 @@
 //! owning loop instance, the loop tree, the projected tables as text and
 //! the diagnostics with their location.
 
-use std::sync::OnceLock;
-
 use oxedi_core::{
-    Cell, DateMode, Diagnostic, Document, Event, LoopTree, Mask, NodeId, Processor, Spec, Tables,
+    Builtin, Cell, DateMode, Diagnostic, Document, Event, LoopTree, Mask, NodeId, Processor, Spec,
+    Tables,
 };
 use serde::Serialize;
 
 #[cfg(test)]
 mod tests;
 
-static BUILTIN: OnceLock<Spec> = OnceLock::new();
-static BUILTIN_4010: OnceLock<Spec> = OnceLock::new();
-
-fn builtin() -> &'static Spec {
-    BUILTIN.get_or_init(Spec::builtin_835)
-}
-
-fn builtin_4010() -> &'static Spec {
-    BUILTIN_4010.get_or_init(Spec::builtin_835_4010)
-}
-
 /// The built-in spec of the version `document` declares, else the default.
 pub(crate) fn select(document: &Document<'_>) -> &'static Spec {
-    Spec::select(&[builtin(), builtin_4010()], builtin(), document.segments())
+    &Builtin::select(document.segments()).spec
 }
 
 /// One file as the viewer shows it.
@@ -192,10 +180,7 @@ struct Walk {
 /// tree and following the open instances, so each segment, a segment with
 /// no content included, gets the innermost instance open when it was read.
 fn walk(spec: &Spec, document: &Document<'_>, mask: Option<&Mask>) -> Walk {
-    let mut processor = Processor::new(spec, document.delimiters());
-    if let Some(mask) = mask {
-        processor = processor.with_mask(mask);
-    }
+    let mut processor = Processor::new(spec, document.delimiters()).with_mask(mask);
     let mut builder = LoopTree::builder();
     let mut owners = Owners::new(document.len());
     let mut diagnostics = Vec::new();

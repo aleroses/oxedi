@@ -1,6 +1,7 @@
 //! `parse`: one pass over a whole file, with the GIL released.
 
-use oxedi_core::{Document, Event, LoopEngine, LoopId, Processor, Spec};
+use oxedi_core::trivia::LeadingTrivia;
+use oxedi_core::{Delimiters, Document, Event, LoopEngine, LoopId, Mask, Processor, Spec};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyfunction, gen_stub_pyme
 use crate::diagnostic;
 use crate::document::{self, PyDelimiters, PyDocument};
 use crate::mask::PyMask;
-use crate::native::{self, Role};
+use crate::native;
 use crate::spec::{self, PySpec};
 use crate::tables::PyTables;
 
@@ -96,40 +97,45 @@ impl PyParseResult {
         self.diagnostics.clone_ref(py)
     }
 
-    /// The rows of `claims`.
+    /// The summary `count_claims` the spec declares (for the built-in 835:
+    /// the number of claims).
     fn count_claims(&self, py: Python<'_>) -> PyResult<usize> {
-        native::count_claims(self.tables.bind(py).get().tables())
+        native::count(self.tables.bind(py).get(), "count_claims")
     }
 
-    /// The distinct non-null values of `claims.patient_id`. Ids are text:
+    /// The summary `count_patients` the spec declares (for the built-in 835:
+    /// the distinct patient ids of the claims). Values are compared as text:
     /// `0123` and `123` are two patients, where edi-835-parser reads both as
     /// the number 123 and counts one.
     fn count_patients(&self, py: Python<'_>) -> PyResult<usize> {
-        native::count_patients(self.tables.bind(py).get().tables())
+        native::count(self.tables.bind(py).get(), "count_patients")
     }
 
-    /// The sum of `payments.total_payment_amount`, as a `Decimal` at the
-    /// column's scale.
+    /// The summary `sum_payments` the spec declares (for the built-in 835:
+    /// the sum of the transactions' total payment amounts), as a `Decimal`
+    /// at the column's scale.
     #[gen_stub(override_return_type(type_repr = "decimal.Decimal", imports = ("decimal",)))]
     fn sum_payments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let sum = native::sum_payments(self.tables.bind(py).get().tables())?;
+        let sum = native::decimal(self.tables.bind(py).get(), "sum_payments")?;
         py.import("decimal")?.getattr("Decimal")?.call1((sum,))
     }
 
-    /// The payer organization from the `payer_*` columns of `payments`, or
-    /// `None` when the file has none.
+    /// The summary `payer` the spec declares (for the built-in 835: the
+    /// payer organization of the one transaction), or `None` when the file
+    /// has none.
     #[getter]
     #[gen_stub(override_return_type(type_repr = "builtins.dict[builtins.str, builtins.str | None] | None", imports = ("builtins",)))]
     fn payer<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
-        organization(py, self.tables.bind(py).get().tables(), Role::Payer)
+        row_dict(py, native::row(self.tables.bind(py).get(), "payer")?)
     }
 
-    /// The payee organization from the `payee_*` columns of `payments`, or
-    /// `None` when the file has none.
+    /// The summary `payee` the spec declares (for the built-in 835: the
+    /// payee organization of the one transaction), or `None` when the file
+    /// has none.
     #[getter]
     #[gen_stub(override_return_type(type_repr = "builtins.dict[builtins.str, builtins.str | None] | None", imports = ("builtins",)))]
     fn payee<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
-        organization(py, self.tables.bind(py).get().tables(), Role::Payee)
+        row_dict(py, native::row(self.tables.bind(py).get(), "payee")?)
     }
 
     fn __repr__(&self, py: Python<'_>) -> String {
@@ -142,18 +148,14 @@ impl PyParseResult {
     }
 }
 
-/// The organization as a dict, or `None`.
-fn organization<'py>(
-    py: Python<'py>,
-    tables: &oxedi_core::Tables,
-    role: Role,
-) -> PyResult<Option<Bound<'py, PyDict>>> {
-    let Some(fields) = native::organization(tables, role)? else {
+/// A row summary as a dict of its fields, in the order the spec writes them.
+fn row_dict<'py>(py: Python<'py>, row: native::Row) -> PyResult<Option<Bound<'py, PyDict>>> {
+    let Some(fields) = row else {
         return Ok(None);
     };
     let dict = PyDict::new(py);
-    for (key, value) in fields {
-        dict.set_item(key, value)?;
+    for (name, value) in fields {
+        dict.set_item(name, value)?;
     }
     Ok(Some(dict))
 }
@@ -175,24 +177,92 @@ pub fn parse(
     mask: Option<&Bound<'_, PyMask>>,
 ) -> PyResult<PyParseResult> {
     let bytes = copy_input("parse", data)?;
-    let given = spec::given(spec);
-    let delimiters = delimiters.map(|d| d.get().inner);
-    let mask = mask.map(|mask| mask.get().inner.clone());
-    let (document, tables, diagnostics) = py.detach(|| -> PyResult<_> {
-        let document = document::index(bytes, delimiters)?;
-        let spec = spec::given_or_selected(given, document.segments());
-        let (tables, diagnostics) = match &mask {
-            Some(mask) => Processor::run_masked(&spec, &document, mask),
-            None => Processor::run(&spec, &document),
-        };
+    let pass = Pass::new(spec, delimiters, mask);
+    let (document, tables, diagnostics) = py.detach(|| pass.run(bytes))?;
+    PyParseResult::new(py, document, tables, diagnostics)
+}
+
+/// What a parse is configured with, as core values: the Python wrappers are
+/// opened once, on the thread that holds the GIL, so the pass itself needs
+/// none.
+struct Pass {
+    given: Option<Arc<Spec>>,
+    delimiters: Option<Delimiters>,
+    mask: Option<Mask>,
+}
+
+impl Pass {
+    fn new(
+        spec: Option<&Bound<'_, PySpec>>,
+        delimiters: Option<&Bound<'_, PyDelimiters>>,
+        mask: Option<&Bound<'_, PyMask>>,
+    ) -> Pass {
+        Pass {
+            given: spec::given(spec),
+            delimiters: delimiters.map(|d| d.get().inner),
+            mask: mask.map(|mask| mask.get().inner.clone()),
+        }
+    }
+
+    /// Indexes `bytes`, then runs the processor with the spec given or the one
+    /// the file's version selects.
+    fn run(
+        self,
+        bytes: Vec<u8>,
+    ) -> PyResult<(Document<'static>, PyTables, Vec<oxedi_core::Diagnostic>)> {
+        let document = document::index(bytes, self.delimiters)?;
+        let spec = spec::given_or_selected(self.given, document.segments());
+        let (tables, diagnostics) = Processor::run(&spec, &document, self.mask.as_ref());
         Ok((document, PyTables::projected(tables, spec), diagnostics))
+    }
+}
+
+impl PyParseResult {
+    /// Wraps the parts of one parse as Python objects.
+    fn new(
+        py: Python<'_>,
+        document: Document<'static>,
+        tables: PyTables,
+        diagnostics: Vec<oxedi_core::Diagnostic>,
+    ) -> PyResult<PyParseResult> {
+        Ok(PyParseResult {
+            document: Py::new(py, PyDocument { inner: document })?,
+            tables: Py::new(py, tables)?,
+            diagnostics: diagnostic::to_list(py, diagnostics)?.unbind(),
+        })
+    }
+}
+
+/// Indexes a whole file without running the loop engine or the projector:
+/// the document, the spec a `parse` of the same arguments uses (the one
+/// given, or the built-in of the version the file declares) and how many
+/// bytes precede the first segment's text (the byte order mark and the
+/// whitespace before the ISA).
+///
+/// Internal: adapters to external validators read a file's document and
+/// spec through it without paying for the tables.
+#[gen_stub_pyfunction]
+#[pyfunction]
+#[pyo3(name = "_parse_document", signature = (data, spec = None))]
+pub fn parse_document(
+    py: Python<'_>,
+    #[gen_stub(override_type(type_repr = "typing_extensions.Buffer", imports = ("typing_extensions",)))]
+    data: &Bound<'_, PyAny>,
+    spec: Option<&Bound<'_, PySpec>>,
+) -> PyResult<(PyDocument, PySpec, usize)> {
+    let bytes = copy_input("_parse_document", data)?;
+    let given = spec::given(spec);
+    let (document, spec, leading) = py.detach(|| -> PyResult<_> {
+        let leading = LeadingTrivia::of(&bytes).len();
+        let document = document::index(bytes, None)?;
+        let spec = spec::given_or_selected(given, document.segments());
+        Ok((document, spec, leading))
     })?;
-    let diagnostics = diagnostic::to_list(py, diagnostics)?;
-    Ok(PyParseResult {
-        document: Py::new(py, PyDocument { inner: document })?,
-        tables: Py::new(py, tables)?,
-        diagnostics: diagnostics.unbind(),
-    })
+    Ok((
+        PyDocument { inner: document },
+        PySpec { inner: spec },
+        leading,
+    ))
 }
 
 /// The open loops at each of `segments`, outermost first, as `(name,
@@ -207,24 +277,21 @@ pub fn parse(
 #[pyfunction]
 #[pyo3(name = "_loop_paths")]
 pub fn loop_paths(
-    py: Python<'_>,
-    result: &Bound<'_, PyParseResult>,
+    document: &Bound<'_, PyDocument>,
+    spec: &Bound<'_, PySpec>,
     segments: Vec<usize>,
 ) -> PyResult<Vec<Vec<(String, usize)>>> {
     if segments.is_empty() {
         return Ok(Vec::new());
     }
-    let result = result.get();
-    let document = &result.document.bind(py).get().inner;
+    let document = &document.get().inner;
     let count = document.len();
     if let Some(&past) = segments.iter().find(|&&index| index >= count) {
         return Err(PyValueError::new_err(format!(
             "_loop_paths: segment {past} is past the document's last segment ({count} segments)"
         )));
     }
-    let tables = result.tables.bind(py).get();
-    let spec = Arc::clone(tables.spec());
-    let at = paths_at(&spec, document, &segments);
+    let at = paths_at(&spec.get().inner, document, &segments);
     Ok(segments
         .into_iter()
         .map(|index| at.get(&index).cloned().unwrap_or_default())
@@ -282,3 +349,4 @@ fn paths_at(
 }
 
 pyo3_stub_gen::export_verbatim!("oxedi._core", "_loop_paths");
+pyo3_stub_gen::export_verbatim!("oxedi._core", "_parse_document");

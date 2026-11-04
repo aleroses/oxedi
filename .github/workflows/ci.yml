@@ -36,6 +36,8 @@ jobs:
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
@@ -51,16 +53,22 @@ jobs:
               - '.cargo/**'
               - 'clippy.toml'
               - 'Makefile'
+              - 'make/**'
               # make readme-py-check compares it with crates/oxedi_py/README.md.
               - 'README.md'
+              # make deps-check runs in the Rust job.
+              - 'tools/deps/**'
               - '.github/**'
             python:
               - 'crates/oxedi_core/**'
               - 'crates/oxedi_py/**'
               - 'crates/oxedi_py/scripts/**'
+              # smoke_wheel.sh runs the wheel check.
+              - 'tools/deps/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'Makefile'
+              - 'make/**'
               - 'rust-toolchain.toml'
               - '.cargo/**'
               - 'LICENSE'
@@ -75,6 +83,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'Makefile'
+              - 'make/**'
               - 'rust-toolchain.toml'
               - '.cargo/**'
               - '.gitmodules'
@@ -91,6 +100,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'Makefile'
+              - 'make/**'
               - 'rust-toolchain.toml'
               - '.cargo/**'
               - '.gitmodules'
@@ -112,6 +122,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'Makefile'
+              - 'make/**'
               - 'rust-toolchain.toml'
               - '.cargo/**'
               - '.github/actions/**'
@@ -121,6 +132,7 @@ jobs:
             workflows:
               - '.github/workflows/**'
               - '.github/scripts/**'
+              - 'tools/**'
               - '.github/actions/setup-uv/**'
               # The complexity ratchet measures these against .github/complexity-baseline.txt.
               - '.github/complexity-baseline.txt'

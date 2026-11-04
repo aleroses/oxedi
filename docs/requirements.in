@@ -1,7 +1,7 @@
 # Tools for the documentation site and its example tests. Used by `make docs-venv` and CI;
 # not part of the oxedi package. The package itself is built into the same environment.
 # docs/requirements.txt is the lock: regenerate it with
-#   uv pip compile --universal docs/requirements.in -o docs/requirements.txt
+#   uv pip compile --universal --generate-hashes docs/requirements.in -o docs/requirements.txt
 mkdocs==1.6.1
 mkdocs-material==9.7.7
 mkdocstrings[python]==1.0.7

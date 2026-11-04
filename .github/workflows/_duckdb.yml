@@ -28,6 +28,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
+          persist-credentials: false
       # stable: the extension's minimum DuckDB (TARGET_DUCKDB_VERSION in its Makefile).
       # latest: the newest release on PyPI. next: the newest pre-release on PyPI.
       - name: Leg

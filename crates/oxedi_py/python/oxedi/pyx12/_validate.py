@@ -7,8 +7,8 @@ import os
 from bisect import bisect_right
 from typing import Any, BinaryIO, Optional, Union
 
-from .. import Diagnostic, Mask, Spec, parse
-from .._core import _external_diagnostic, _loop_paths, _mask_findings
+from .. import Diagnostic, Document, Mask, Spec
+from .._core import _external_diagnostic, _loop_paths, _mask_findings, _parse_document
 from . import _capture
 from ._tree import Finding, collect
 
@@ -17,7 +17,6 @@ Draft = dict[str, Any]
 
 Source = Union[bytes, bytearray, memoryview, str, "os.PathLike[str]", BinaryIO]
 
-_ISA_LENGTH = 106
 _ORIGIN = "pyx12"
 _FAILURE_LEVEL = 1
 
@@ -73,7 +72,7 @@ class _Positions:
         for index in range(len(document)):
             offset += len(document[index].raw)
             ends.append(offset)
-        terminator = text[_ISA_LENGTH - 1] if len(text) >= _ISA_LENGTH else "~"
+        terminator = bytes(document.delimiters.segment).decode("latin-1")
         starts: list[int] = []
         position = 0
         while True:
@@ -106,6 +105,11 @@ class _Run:
         self.handler: Any = None
         self.track: list[int] = []
         self.failure: Optional[BaseException] = None
+
+    def refused(self, found: list[Finding]) -> bool:
+        """Whether pyx12 refused the file: it found nothing, did not accept
+        it and finished no segment."""
+        return not (found or self.ok or self.track)
 
 
 def _run(text: str) -> _Run:
@@ -163,15 +167,10 @@ def _element_bytes(
     """The bytes of a 1-based element, or of one of its components, of
     ``segment``, a composite's components joined by ``separator``; empty
     when the segment has no such position."""
-    elements = segment.elements
-    if not 1 <= element <= len(elements):
+    value = segment.element(element, component)
+    if value is None:
         return b""
-    value = elements[element - 1]
-    if isinstance(value, list):
-        if component is None:
-            return separator.join(value)
-        return value[component - 1] if 1 <= component <= len(value) else b""
-    return value if component in (None, 1) else b""
+    return separator.join(value) if isinstance(value, list) else value
 
 
 def _completed(track: list[int], positions: _Positions) -> Optional[int]:
@@ -208,7 +207,7 @@ def _failure(reason: str, track: list[int], positions: _Positions, document: Any
     )
 
 
-def _rejection(text: str, positions: _Positions, document: Any, masked: bool) -> Draft:
+def _rejection(text: str, positions: _Positions, document: Document, masked: bool) -> Draft:
     """The failure for a file pyx12 refuses to read as X12: at the segment
     holding the ISA, with its bytes as the datum, or, when ``masked``, only
     the segment id, as the bytes name no element a mask could reach. pyx12
@@ -225,10 +224,11 @@ def _rejection(text: str, positions: _Positions, document: Any, masked: bool) ->
     datum = b""
     if segment is not None:
         if masked:
-            datum = b"ISA"
+            datum = bytes(document[segment].id)
         else:
-            raw = bytes(document[segment].raw)
-            datum = raw[max(raw.find(b"ISA"), 0):].rstrip(b"\r\n")
+            # The segment of line 1 is segment 0, whose raw bytes start with
+            # the leading trivia the document reports before the ISA.
+            datum = bytes(document[segment].raw)[positions.base:].rstrip(b"\r\n")
     where = f"it rejected segment #{segment}" if segment is not None else "it reached no segment"
     return dict(
         message=f"could not finish validating: {reason}; {where}",
@@ -242,22 +242,29 @@ def _by_segment(draft: Draft) -> tuple[bool, int]:
     return (draft["segment"] is None, draft["segment"] or 0)
 
 
-def _finish(result: Any, drafts: list[Draft]) -> tuple[list[Diagnostic], list[bool]]:
+def _arguments(draft: Draft) -> Draft:
+    """The arguments of ``_external_diagnostic`` that ``draft`` holds."""
+    return {k: v for k, v in draft.items() if k != "own_text"}
+
+
+def _finish(
+    document: Document, spec: Spec, drafts: list[Draft]
+) -> tuple[list[Diagnostic], list[bool]]:
     """The diagnostics of ``drafts`` in segment order, each with the loop
     path ``parse`` gives its segment, and, for each, whether its message is
     text oxedi wrote (a failure finding) rather than pyx12's."""
     drafts = sorted(drafts, key=_by_segment)
-    own = [d.get("own_text", False) for d in drafts]
-    drafts = [{k: v for k, v in d.items() if k != "own_text"} for d in drafts]
     segments = [d["segment"] for d in drafts if d["segment"] is not None]
-    paths = iter(_loop_paths(result, segments))
+    paths = iter(_loop_paths(document, spec, segments))
     found = [
         _external_diagnostic(
-            _ORIGIN, path=next(paths) if d["segment"] is not None else None, **d
+            _ORIGIN,
+            path=next(paths) if d["segment"] is not None else None,
+            **_arguments(d),
         )
         for d in drafts
     ]
-    return found, own
+    return found, [d.get("own_text", False) for d in drafts]
 
 
 def validate(
@@ -354,11 +361,11 @@ def validate(
         )
     _import_pyx12()
     data = _read(source)
-    result = parse(data, spec=spec)
-    findings, own = _findings(data, result, masked=mask is not None)
+    document, used, base = _parse_document(data, spec)
+    findings, own = _findings(data, document, used, base, masked=mask is not None)
     if mask is None:
         return findings
-    return _mask_findings(findings, result.document, mask, result.spec, own)
+    return _mask_findings(findings, document, mask, used, own)
 
 
 def _reason(err: BaseException, masked: bool) -> str:
@@ -371,28 +378,48 @@ def _reason(err: BaseException, masked: bool) -> str:
     return f"{type(err).__name__}: {err}"
 
 
-def _findings(
-    data: bytes, result: Any, masked: bool
-) -> tuple[list[Diagnostic], list[bool]]:
-    """pyx12's findings about ``data``, whose parse is ``result``, and for
-    each whether its message is text oxedi wrote; with ``masked``, failure
-    findings leave out the text of pyx12's exception."""
-    document = result.document
-    base = data.find(b"ISA")
-    text = data[max(base, 0):].decode("latin-1")
-    positions = _Positions.build(document, max(base, 0), text)
-    run = _run(text)
+def _problem(run: _Run, masked: bool) -> Optional[str]:
+    """Why pyx12's run left nothing to read, or ``None`` when it left an
+    error handler."""
     if run.failure is not None:
-        reason = _reason(run.failure, masked)
-        return _finish(result, [_failure(reason, run.track, positions, document)])
+        return _reason(run.failure, masked)
     if run.handler is None:
-        failure = _failure("pyx12 built no error handler", run.track, positions, document)
-        return _finish(result, [failure])
+        return "pyx12 built no error handler"
+    return None
+
+
+def _collected(handler: Any, masked: bool) -> tuple[list[Finding], Optional[str]]:
+    """The findings of pyx12's error tree, or why it could not be read."""
     try:
-        found = collect(run.handler)
+        return collect(handler), None
     except Exception as err:  # pyx12's tree is not ours: report it, do not raise
-        reason = f"its error tree could not be read ({_reason(err, masked)})"
-        return _finish(result, [_failure(reason, run.track, positions, document)])
-    if not found and not run.ok and not run.track:
-        return _finish(result, [_rejection(text, positions, document, masked)])
-    return _finish(result, [_diagnostic(f, positions, document) for f in found])
+        return [], f"its error tree could not be read ({_reason(err, masked)})"
+
+
+def _drafts(
+    text: str, positions: _Positions, document: Document, masked: bool
+) -> list[Draft]:
+    """The findings of a run of pyx12 on ``text``; when it could not finish
+    or its tree could not be read, the one failure finding that says so."""
+    run = _run(text)
+    reason = _problem(run, masked)
+    found: list[Finding] = []
+    if reason is None:
+        found, reason = _collected(run.handler, masked)
+    if reason is not None:
+        return [_failure(reason, run.track, positions, document)]
+    if run.refused(found):
+        return [_rejection(text, positions, document, masked)]
+    return [_diagnostic(f, positions, document) for f in found]
+
+
+def _findings(
+    data: bytes, document: Document, spec: Spec, base: int, masked: bool
+) -> tuple[list[Diagnostic], list[bool]]:
+    """pyx12's findings about ``data``, whose ISA starts at byte ``base``
+    and whose document and spec are given, and for each whether its message
+    is text oxedi wrote; with ``masked``, failure findings leave out the
+    text of pyx12's exception."""
+    text = data[base:].decode("latin-1")
+    positions = _Positions.build(document, base, text)
+    return _finish(document, spec, _drafts(text, positions, document, masked))

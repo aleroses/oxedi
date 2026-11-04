@@ -1,6 +1,6 @@
 use super::*;
 use crate::Delimiters;
-use crate::spec::ElementType;
+use crate::value::ElementType;
 
 fn path(loops: &[(&str, usize)]) -> Vec<LoopRef> {
     loops
@@ -906,5 +906,192 @@ fn external_displays_the_message_the_origin_and_the_code() {
     assert_eq!(
         rule(None).to_string(),
         "Mandatory data element missing (reported by pyx12)"
+    );
+}
+
+#[test]
+fn flat_of_a_parser_rule() {
+    let diagnostic = Diagnostic::new(
+        Rule::UnknownSegment {
+            segment_id: b"XX".to_vec(),
+        },
+        Some(7),
+        None,
+        None,
+        path(&[("1000A", 1), ("2100", 2)]),
+        b"XX".to_vec(),
+    );
+    let flat = diagnostic.flat();
+    assert_eq!(flat.level, 1);
+    assert_eq!(flat.kind, "UnknownSegment");
+    assert_eq!(flat.rule, diagnostic.rule.to_string());
+    assert_eq!(flat.segment, Some(7));
+    assert_eq!(flat.path, "1000A#1/2100#2");
+    assert_eq!(flat.datum, b"XX");
+    assert_eq!(flat.origin, "oxedi");
+    assert_eq!(flat.code, None);
+}
+
+#[test]
+fn flat_of_an_external_finding() {
+    let diagnostic = Diagnostic::new(
+        Rule::External {
+            origin: "pyx12".into(),
+            code: Some("8".into()),
+            message: "Mandatory data element missing".into(),
+            level: SnipLevel::L2,
+        },
+        Some(3),
+        Some(2),
+        Some(1),
+        Vec::new(),
+        b"".to_vec(),
+    );
+    let flat = diagnostic.flat();
+    assert_eq!(flat.level, 2);
+    assert_eq!(flat.kind, "External");
+    assert_eq!((flat.element, flat.component), (Some(2), Some(1)));
+    assert_eq!(flat.path, "");
+    assert_eq!(flat.origin, "pyx12");
+    assert_eq!(flat.code, Some("8"));
+}
+
+#[test]
+fn origin_and_code_read_the_rule_without_formatting_it() {
+    let own = Diagnostic::new(
+        Rule::ByteOrderMark,
+        None,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+    );
+    assert_eq!((own.origin(), own.code()), (PARSER_ORIGIN, None));
+    let external = Diagnostic::new(
+        Rule::External {
+            origin: "pyx12".into(),
+            code: Some("8".into()),
+            message: "m".into(),
+            level: SnipLevel::L2,
+        },
+        None,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+    );
+    assert_eq!((external.origin(), external.code()), ("pyx12", Some("8")));
+}
+
+#[test]
+fn path_text_joins_the_open_loops() {
+    let at = |loops: &[(&str, usize)]| {
+        Diagnostic::new(
+            Rule::UnknownSegment {
+                segment_id: b"XX".to_vec(),
+            },
+            Some(0),
+            None,
+            None,
+            path(loops),
+            b"XX".to_vec(),
+        )
+        .path_text()
+    };
+    assert_eq!(at(&[]), "");
+    assert_eq!(at(&[("a", 1)]), "a#1");
+    assert_eq!(at(&[("a", 1), ("b", 2)]), "a#1/b#2");
+}
+
+#[test]
+fn code_and_occurrence_lists_are_spelled_out_up_to_the_limit() {
+    let code_rule = |count| Rule::CodeNotInList {
+        segment_id: b"SVC".to_vec(),
+        element: 1,
+        component: None,
+        name: "qualifier".into(),
+        codes: codes(count),
+        occurrence: None,
+    };
+    assert_eq!(
+        code_rule(4).to_string(),
+        "element SVC01 (qualifier) is not one of the 4 codes the spec lists for it (\"A\", \"B\", \"C\", \"D\")"
+    );
+    assert_eq!(
+        code_rule(5).to_string(),
+        "element SVC01 (qualifier) is not one of the 5 codes the spec lists for it (\"A\", \"B\", \"C\", \"D\", \"E\")"
+    );
+    assert_eq!(
+        code_rule(6).to_string(),
+        "element SVC01 (qualifier) is not one of the 6 codes the spec lists for it"
+    );
+    let occurrence_rule = |count| Rule::UnknownOccurrence {
+        loop_name: "2100".into(),
+        segment_id: b"NM1".to_vec(),
+        element: 1,
+        component: None,
+        occurrences: codes(count),
+    };
+    assert_eq!(
+        occurrence_rule(4).to_string(),
+        "segment \"NM1\" matches none of the 4 occurrences loop \"2100\" declares for it (\"A\", \"B\", \"C\", \"D\"): NM101 holds none of their qualifier codes"
+    );
+    assert_eq!(
+        occurrence_rule(5).to_string(),
+        "segment \"NM1\" matches none of the 5 occurrences loop \"2100\" declares for it (\"A\", \"B\", \"C\", \"D\", \"E\"): NM101 holds none of their qualifier codes"
+    );
+    assert_eq!(
+        occurrence_rule(6).to_string(),
+        "segment \"NM1\" matches none of the 6 occurrences loop \"2100\" declares for it: NM101 holds none of their qualifier codes"
+    );
+}
+
+#[test]
+fn a_balance_lists_ten_segments_then_counts_the_rest() {
+    let rule = |count: usize| Rule::BalanceMismatch {
+        rule: "r".into(),
+        loop_name: "2100".into(),
+        opened_at: Some(1),
+        target: "CLP03".into(),
+        sum: "CAS03".into(),
+        expected: 5,
+        computed: 0,
+        scale: 2,
+        segments: (1..=count).collect(),
+    };
+    let head = "balancing rule \"r\" fails in loop \"2100\" opened at segment #1: CLP03 is 0.05, but CAS03 adds up to 0.00 (off by 0.05); read from segments ";
+    assert_eq!(
+        rule(9).to_string(),
+        format!("{head}#1, #2, #3, #4, #5, #6, #7, #8, #9")
+    );
+    assert_eq!(
+        rule(10).to_string(),
+        format!("{head}#1, #2, #3, #4, #5, #6, #7, #8, #9, #10")
+    );
+    assert_eq!(
+        rule(11).to_string(),
+        format!("{head}#1, #2, #3, #4, #5, #6, #7, #8, #9, #10 and 1 more")
+    );
+}
+
+#[test]
+fn a_balance_whose_difference_overflows_leaves_it_out() {
+    let rule = Rule::BalanceMismatch {
+        rule: "r".into(),
+        loop_name: "2100".into(),
+        opened_at: None,
+        target: "CLP03".into(),
+        sum: "CAS03".into(),
+        expected: i128::MIN,
+        computed: 1,
+        scale: 0,
+        segments: vec![3],
+    };
+    assert_eq!(
+        rule.to_string(),
+        format!(
+            "balancing rule \"r\" fails in loop \"2100\" opened implicitly: CLP03 is {}, but CAS03 adds up to 1; read from segments #3",
+            i128::MIN
+        )
     );
 }

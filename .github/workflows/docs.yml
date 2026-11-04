@@ -37,6 +37,7 @@ on:
       - "Cargo.lock"
       - ".cargo/**"
       - "Makefile"
+      - "make/**"
       - "rust-toolchain.toml"
       - ".github/workflows/docs.yml"
       - ".github/scripts/**"
@@ -74,6 +75,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # mike needs the gh-pages history
+          # No token in .git/config while project code builds; the deploy step hands it to
+          # git push alone.
+          persist-credentials: false
       # The Viewer job's compile cache holds the same builds (the package and the module); this
       # job reads it and never writes it.
       - uses: ./.github/actions/setup-rust
@@ -134,4 +138,8 @@ jobs:
         env:
           KIND: ${{ steps.target.outputs.kind }}
           VERSION: ${{ steps.target.outputs.version }}
-        run: .github/scripts/deploy-docs.sh "$KIND" ${VERSION:+"$VERSION"}
+          # Only this step's shell holds it: exec replaces that shell with the script, started
+          # without the variable, which reads the token from file descriptor 3 and gives it only
+          # to git push.
+          PAGES_PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: exec env -u PAGES_PUSH_TOKEN .github/scripts/deploy-docs.sh "$KIND" ${VERSION:+"$VERSION"} 3<<<"$PAGES_PUSH_TOKEN"

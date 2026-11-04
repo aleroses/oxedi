@@ -5,13 +5,13 @@ use super::super::input::{
     BoundField, BoundTable, EnumIndex, FieldType, InputColumn, InputField, InputTable, Integer,
     bind,
 };
-use crate::builtins::{Builtin, Builtins};
+use crate::builtins::{BuiltinSchema, Builtins};
 
 fn builtins() -> Builtins {
     Builtins::load()
 }
 
-fn spec(builtins: &Builtins) -> &Builtin {
+fn spec(builtins: &Builtins) -> &BuiltinSchema {
     builtins.default()
 }
 

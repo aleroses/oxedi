@@ -1,6 +1,7 @@
-//! Parsers from X12 element text to column values, and the civil-date arithmetic they use.
+//! Parsers from X12 element text to column values.
 
 use super::DECIMAL_PRECISION;
+use super::calendar::{days_from_civil_unchecked, is_civil, seconds_of_day};
 
 /// Splits an optional leading minus sign off `text`.
 fn sign(text: &[u8]) -> (bool, &[u8]) {
@@ -36,6 +37,15 @@ pub fn parse_n(text: &[u8]) -> Option<i64> {
         negated.checked_neg()?
     };
     i64::try_from(value).ok()
+}
+
+/// A count: at least one ASCII digit, leading zeros allowed, nothing else
+/// (no sign); `None` past `u64`.
+pub(crate) fn parse_unsigned(text: &[u8]) -> Option<u64> {
+    if text.is_empty() {
+        return None;
+    }
+    u64::try_from(accumulate(0, text)?.checked_neg()?).ok()
 }
 
 /// An `R` value scaled by `10^scale`: an optional `-`, digits, and at most
@@ -81,49 +91,36 @@ fn small_number(digits: &[u8]) -> Option<i32> {
     })
 }
 
-fn is_leap(year: i32) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+/// A reader of fixed-width digit fields, front to back.
+struct Fields<'a> {
+    rest: &'a [u8],
 }
 
-pub(super) fn days_in_month(year: i32, month: i32) -> i32 {
-    match month {
-        2 if is_leap(year) => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
+impl<'a> Fields<'a> {
+    fn new(text: &'a [u8]) -> Fields<'a> {
+        Fields { rest: text }
     }
-}
 
-/// Days from 1970-01-01 to a proleptic Gregorian date (H. Hinnant's
-/// `days_from_civil`).
-fn days_from_civil(year: i32, month: i32, day: i32) -> i32 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let march_based_month = (month + 9) % 12;
-    let day_of_year = (153 * march_based_month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
+    /// The next `width` bytes as a number; `None` when fewer remain or they
+    /// are not all digits.
+    fn take(&mut self, width: usize) -> Option<i32> {
+        let (digits, rest) = self.rest.split_at_checked(width)?;
+        self.rest = rest;
+        small_number(digits)
+    }
 
-/// The proleptic Gregorian date `days` after 1970-01-01 (H. Hinnant's
-/// `civil_from_days`), the inverse of [`days_from_civil`].
-pub(crate) fn civil_from_days(days: i32) -> (i32, i32, i32) {
-    let shifted = days.saturating_add(719_468);
-    let era = shifted.div_euclid(146_097);
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let march_based_month = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * march_based_month + 2) / 5 + 1;
-    let month = if march_based_month < 10 {
-        march_based_month + 3
-    } else {
-        march_based_month - 9
-    };
-    let year = year_of_era + era * 400 + i32::from(month <= 2);
-    (year, month, day)
+    /// The next `width` bytes as a number, or 0 when nothing remains.
+    fn take_or_zero(&mut self, width: usize) -> Option<i32> {
+        if self.rest.is_empty() {
+            return Some(0);
+        }
+        self.take(width)
+    }
+
+    /// Whether what remains is nothing or one or two digits.
+    fn ends_in_short_fraction(&self) -> bool {
+        self.rest.is_empty() || (self.rest.len() <= 2 && small_number(self.rest).is_some())
+    }
 }
 
 /// A `DT` value as days since 1970-01-01: `CCYYMMDD`, or `YYMMDD` with
@@ -132,50 +129,36 @@ pub(crate) fn civil_from_days(days: i32) -> (i32, i32, i32) {
 /// date"): it is not a meaningful `CCYY`.
 pub fn parse_dt(text: &[u8]) -> Option<i32> {
     let (year, month, day) = civil_date(text)?;
-    Some(days_from_civil(year, month, day))
-}
-
-/// Whether [`parse_dt`] accepts `text`, without counting the days.
-pub(crate) fn is_dt(text: &[u8]) -> bool {
-    civil_date(text).is_some()
+    days_from_civil_unchecked(year, month, day)
 }
 
 /// The year, month and day of a `DT` value, checked as [`parse_dt`] describes.
 fn civil_date(text: &[u8]) -> Option<(i32, i32, i32)> {
-    let (year, month_day) = match text.len() {
-        8 => (small_number(text.get(..4)?)?, text.get(4..)?),
-        6 => {
-            let year = small_number(text.get(..2)?)?;
-            let century = if year < 50 { 2000 } else { 1900 };
-            (century + year, text.get(2..)?)
-        }
-        _ => return None,
-    };
-    let month = small_number(month_day.get(..2)?)?;
-    let day = small_number(month_day.get(2..)?)?;
-    if year < 1 || !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
-        return None;
-    }
-    Some((year, month, day))
+    let mut fields = Fields::new(text);
+    let year = match text.len() {
+        8 => fields.take(4),
+        6 => fields.take(2).map(full_year),
+        _ => None,
+    }?;
+    let month = fields.take(2)?;
+    let day = fields.take(2)?;
+    is_civil(year, month, day).then_some((year, month, day))
+}
+
+/// A two-digit year: 00–49 in the 2000s, 50–99 in the 1900s.
+fn full_year(year: i32) -> i32 {
+    if year < 50 { 2000 + year } else { 1900 + year }
 }
 
 /// A `TM` value as seconds since midnight: `HHMM`, `HHMMSS`, or `HHMMSS`
 /// followed by one or two decimal-second digits, which are ignored.
 pub fn parse_tm(text: &[u8]) -> Option<i32> {
-    if !matches!(text.len(), 4 | 6 | 7 | 8) {
+    let mut fields = Fields::new(text);
+    let hour = fields.take(2)?;
+    let minute = fields.take(2)?;
+    let second = fields.take_or_zero(2)?;
+    if !fields.ends_in_short_fraction() {
         return None;
     }
-    let hour = small_number(text.get(..2)?)?;
-    let minute = small_number(text.get(2..4)?)?;
-    let second = match text.get(4..6) {
-        Some(digits) => small_number(digits)?,
-        None => 0,
-    };
-    if text.len() > 6 {
-        small_number(text.get(6..)?)?;
-    }
-    if hour > 23 || minute > 59 || second > 59 {
-        return None;
-    }
-    Some(hour * 3600 + minute * 60 + second)
+    seconds_of_day(hour, minute, second)
 }

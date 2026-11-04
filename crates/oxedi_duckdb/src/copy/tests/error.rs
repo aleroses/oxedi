@@ -111,13 +111,14 @@ fn output_when_the_size_cannot_be_measured() {
 
 #[test]
 fn unknown_version() {
+    let error = CopyError::UnknownVersion {
+        source: oxedi_core::Builtin::find_text("835", "3070").unwrap_err(),
+    };
     assert_eq!(
-        text(CopyError::UnknownVersion {
-            version: "3070".to_owned(),
-            known: vec!["5010", "4010"],
-        }),
+        error.to_string(),
         "edi835: unknown version \"3070\"; version must be one of \"5010\", \"4010\""
     );
+    assert!(error.source().is_none());
 }
 
 #[test]

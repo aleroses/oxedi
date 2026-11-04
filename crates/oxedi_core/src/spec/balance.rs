@@ -1,6 +1,6 @@
 //! Balancing rules: amounts that must add up inside one instance of a loop,
-//! their JSON shape check, their compilation against the loops and the
-//! `segments` section, and the text that describes them in messages.
+//! their compilation against the loops and the `segments` section, and the
+//! text that describes them in messages. Their JSON shape is in `schema`.
 //!
 //! A rule names the loop whose every instance it checks (`per`), a `target`
 //! and a `sum`, each a list of signed values. A value reads one or more
@@ -19,11 +19,11 @@ use super::balance_error::BalanceError;
 use super::error::SpecError;
 use super::loops::LoopId;
 use super::occurrence_error::place;
-use super::occurrences::{element_def, type_code};
+use super::occurrences::element_def;
 use super::raw::{RawBalance, RawTerm};
-use super::render::{child, render_key, render_value};
-use super::segments::ElementType;
-use super::shape::{Leaf, check_keys, check_leaf, check_member, kind_of, object_at};
+use super::render::render_key;
+use super::segments::ElementDef;
+use crate::value::ElementType;
 
 /// One signed value of a balancing rule: elements of an occurrence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,66 +54,6 @@ pub struct BalanceRule {
     pub sum: Vec<BalanceTerm>,
     /// Decimal places the rule adds at: the largest scale of its elements.
     pub scale: u8,
-}
-
-/// An array at `at`, or [`SpecError::WrongType`] naming it.
-fn array_at<'v>(
-    value: &'v Value,
-    at: &str,
-    expected: &'static str,
-) -> Result<&'v [Value], SpecError> {
-    match value {
-        Value::Array(items) => Ok(items),
-        other => Err(SpecError::WrongType {
-            path: at.to_string(),
-            expected,
-            found: kind_of(other),
-            value: render_value(other),
-        }),
-    }
-}
-
-/// Requires the `balancing` section to be an object of rule objects with the
-/// keys and scalar kinds the schema defines.
-pub(super) fn check_balancing_shape(balancing: &Value) -> Result<(), SpecError> {
-    for (name, rule) in object_at(balancing, "balancing")? {
-        let at = child("balancing", name);
-        let rule = object_at(rule, &at)?;
-        let keys = ["per", "target", "sum"];
-        check_keys(rule, &at, &keys, &keys)?;
-        check_member(rule, &at, "per", Leaf::Text, false)?;
-        for side in ["target", "sum"] {
-            let Some(terms) = rule.get(side) else {
-                continue;
-            };
-            let at = child(&at, side);
-            for (i, term) in array_at(terms, &at, "an array of objects")?
-                .iter()
-                .enumerate()
-            {
-                let at = format!("{at}[{i}]");
-                let term = object_at(term, &at)?;
-                check_keys(
-                    term,
-                    &at,
-                    &["loop", "occurrence", "elements", "component", "sign"],
-                    &["occurrence", "elements"],
-                )?;
-                check_member(term, &at, "loop", Leaf::Text, true)?;
-                check_member(term, &at, "occurrence", Leaf::Text, false)?;
-                check_member(term, &at, "component", Leaf::Count, true)?;
-                check_member(term, &at, "sign", Leaf::Text, true)?;
-                if let Some(elements) = term.get("elements") {
-                    let at = child(&at, "elements");
-                    let positions = array_at(elements, &at, "an array of non-negative integers")?;
-                    for (j, position) in positions.iter().enumerate() {
-                        check_leaf(position, &format!("{at}[{j}]"), Leaf::Count)?;
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Compiles the `balancing` section against the loops and segments of `spec`.
@@ -190,68 +130,57 @@ fn compile_term(
     counted: &mut Counted,
     scale: &mut u8,
 ) -> Result<BalanceTerm, BalanceError> {
-    let loop_id = match &term.loop_name {
-        None => per,
-        Some(name) => {
-            let key = format!("{at}.loop");
-            let id = spec
-                .loop_id(name)
-                .ok_or_else(|| BalanceError::UnknownLoop {
-                    key: key.clone(),
-                    name: name.clone(),
-                })?;
-            if id != per && !spec.ancestors(id).contains(&per) {
-                return Err(BalanceError::LoopOutsidePer {
-                    key,
-                    loop_name: name.clone(),
-                    per: spec.loop_name(per).to_string(),
-                });
-            }
-            id
-        }
-    };
+    let loop_id = term_loop(spec, per, at, term.loop_name.as_deref())?;
     let def = spec.get(loop_id);
-    let occurrence = def
+    let (occurrence, segment) = def
         .occurrences
         .iter()
-        .position(|occurrence| occurrence.name == term.occurrence)
+        .enumerate()
+        .find(|(_, occurrence)| occurrence.name == term.occurrence)
+        .map(|(index, occurrence)| (index, occurrence.segment.as_slice()))
         .ok_or_else(|| BalanceError::UnknownOccurrence {
             key: format!("{at}.occurrence"),
             loop_name: def.name.clone(),
             occurrence: term.occurrence.clone(),
         })?;
+    let read = BalanceTerm {
+        loop_id,
+        occurrence,
+        elements: term.elements.clone(),
+        component: term.component,
+        negative: false,
+    };
+    read_elements(spec, at, &read, segment, counted, scale)?;
+    Ok(BalanceTerm {
+        negative: is_negative(at, term.sign.as_deref())?,
+        ..read
+    })
+}
+
+/// Checks the elements `term` reads, written at `{at}.elements`, from its
+/// occurrence of `segment`: there is at least one, each is a decimal and
+/// none is read by the rule already. Records each in `counted` and raises
+/// `scale` to the largest scale among them.
+fn read_elements(
+    spec: &Spec,
+    at: &str,
+    term: &BalanceTerm,
+    segment: &[u8],
+    counted: &mut Counted,
+    scale: &mut u8,
+) -> Result<(), BalanceError> {
     if term.elements.is_empty() {
         return Err(BalanceError::NoElements {
             key: format!("{at}.elements"),
         });
     }
-    let segment = def
-        .occurrences
-        .get(occurrence)
-        .map(|occurrence| occurrence.segment.clone())
-        .unwrap_or_default();
-    let segment_text = String::from_utf8_lossy(&segment).into_owned();
+    let segment_text = String::from_utf8_lossy(segment);
     for (j, &element) in term.elements.iter().enumerate() {
         let key = format!("{at}.elements[{j}]");
         let place = place(&segment_text, element, term.component);
-        let element_def = element_def(&spec.segments, &segment, element, term.component)
-            .ok_or_else(|| BalanceError::UndefinedElement {
-                key: key.clone(),
-                place: place.clone(),
-            })?;
-        match element_def.kind {
-            ElementType::R { scale: own } if element_def.composite.is_empty() => {
-                *scale = (*scale).max(own);
-            }
-            kind => {
-                return Err(BalanceError::NotDecimal {
-                    key,
-                    place,
-                    found: type_code(kind),
-                });
-            }
-        }
-        let address = (loop_id, occurrence, element, term.component);
+        let found = element_def(&spec.segments, segment, element, term.component);
+        *scale = (*scale).max(decimal_scale(found, &key, &place)?);
+        let address = (term.loop_id, term.occurrence, element, term.component);
         if let Some((_, first)) = counted.iter().find(|(seen, _)| *seen == address) {
             return Err(BalanceError::RepeatedValue {
                 key,
@@ -261,23 +190,69 @@ fn compile_term(
         }
         counted.push((address, key));
     }
-    let negative = match term.sign.as_deref() {
-        None | Some("+") => false,
-        Some("-") => true,
-        Some(found) => {
-            return Err(BalanceError::UnknownSign {
-                key: format!("{at}.sign"),
-                found: found.to_string(),
-            });
-        }
+    Ok(())
+}
+
+/// The loop a term reads, written at `{at}.loop`: `per` when the term names
+/// none, otherwise the named loop, which must be `per` or one below it.
+fn term_loop(
+    spec: &Spec,
+    per: LoopId,
+    at: &str,
+    name: Option<&str>,
+) -> Result<LoopId, BalanceError> {
+    let Some(name) = name else {
+        return Ok(per);
     };
-    Ok(BalanceTerm {
-        loop_id,
-        occurrence,
-        elements: term.elements.clone(),
-        component: term.component,
-        negative,
-    })
+    let key = format!("{at}.loop");
+    let id = spec
+        .loop_id(name)
+        .ok_or_else(|| BalanceError::UnknownLoop {
+            key: key.clone(),
+            name: name.to_string(),
+        })?;
+    if id != per && !spec.ancestors(id).contains(&per) {
+        return Err(BalanceError::LoopOutsidePer {
+            key,
+            loop_name: name.to_string(),
+            per: spec.loop_name(per).to_string(),
+        });
+    }
+    Ok(id)
+}
+
+/// The scale of an element a term reads, named `place` at `key`: the element
+/// must be defined and be a simple `R` element or an `R` component.
+fn decimal_scale(def: Option<&ElementDef>, key: &str, place: &str) -> Result<u8, BalanceError> {
+    match def {
+        None => Err(BalanceError::UndefinedElement {
+            key: key.to_string(),
+            place: place.to_string(),
+        }),
+        Some(ElementDef {
+            kind: ElementType::R { scale },
+            composite,
+            ..
+        }) if composite.is_empty() => Ok(*scale),
+        Some(def) => Err(BalanceError::NotDecimal {
+            key: key.to_string(),
+            place: place.to_string(),
+            found: def.kind.code(),
+        }),
+    }
+}
+
+/// Reads a term's `sign`, written at `{at}.sign`: `true` for `-`, `false` for
+/// `+` or no sign.
+fn is_negative(at: &str, sign: Option<&str>) -> Result<bool, BalanceError> {
+    match sign {
+        None | Some("+") => Ok(false),
+        Some("-") => Ok(true),
+        Some(found) => Err(BalanceError::UnknownSign {
+            key: format!("{at}.sign"),
+            found: found.to_string(),
+        }),
+    }
 }
 
 /// The signed values of one side of a rule, e.g. `sum of CLP04 of 2100
@@ -322,17 +297,4 @@ pub(crate) fn render_terms(spec: &Spec, per: LoopId, terms: &[BalanceTerm]) -> S
         out.push_str(&format!(" of {} {occurrence:?}", render_key(&def.name)));
     }
     out
-}
-
-/// A scaled amount as decimal text with `scale` places, e.g. `-12.50`.
-pub(crate) fn render_amount(value: i128, scale: u8) -> String {
-    let digits = value.unsigned_abs().to_string();
-    let scale = usize::from(scale);
-    let sign = if value < 0 { "-" } else { "" };
-    if scale == 0 {
-        return format!("{sign}{digits}");
-    }
-    let padded = format!("{digits:0>width$}", width = scale + 1);
-    let (whole, fraction) = padded.split_at(padded.len() - scale);
-    format!("{sign}{whole}.{fraction}")
 }

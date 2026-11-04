@@ -361,7 +361,7 @@ fn invalid_occurrences_are_rejected_naming_loop_occurrence_rule_and_datum() {
         ),
         (
             r#"{"loops":{"head":{"occurrences":{"note":{"maximum":2}}}}}"#,
-            "spec: unknown key \"maximum\" at loops.head.occurrences.note",
+            "spec: unknown key \"maximum\" at loops.head.occurrences.note; the allowed keys are: codes, max, pos, qualifier, segment, usage",
         ),
         (
             r#"{"loops":{"head":{"occurrences":{"extra":{"segment":"EX"}}}}}"#,
@@ -455,4 +455,39 @@ fn a_qualifier_without_a_component_reads_a_composite_at_its_first_component() {
     let input = segs(b"ID*A:9~ID*B:A~ID*A~ID~");
     let matching: Vec<bool> = input.iter().map(|s| qualifier.matches(s)).collect();
     assert_eq!(matching, [true, false, true, false]);
+}
+
+#[test]
+fn a_trigger_opens_on_an_occurrence_by_segment_and_qualifier_code() {
+    let occurrence = |qualifier: Option<Qualifier>| OccurrenceDef {
+        name: "o".into(),
+        segment: b"NM".to_vec(),
+        pos: 10,
+        usage: Usage::Required,
+        max: None,
+        qualifier,
+        codes: BTreeMap::new(),
+    };
+    let trigger = |conditions: &[(usize, &[u8])]| Trigger {
+        segment: b"NM".to_vec(),
+        conditions: conditions.iter().map(|&(p, v)| (p, v.to_vec())).collect(),
+    };
+    let qualified = occurrence(Some(Qualifier {
+        element: 1,
+        component: None,
+        codes: vec!["IL".into(), "QC".into()],
+    }));
+    assert!(qualified.opens_on(&trigger(&[(1, b"QC")])));
+    assert!(qualified.opens_on(&trigger(&[(1, b"IL")])));
+    assert!(!qualified.opens_on(&trigger(&[(1, b"ZZ")])));
+    assert!(!qualified.opens_on(&trigger(&[(2, b"QC")])));
+    assert!(!qualified.opens_on(&trigger(&[])));
+    let bare = occurrence(None);
+    assert!(bare.opens_on(&trigger(&[])));
+    assert!(bare.opens_on(&trigger(&[(1, b"ZZ")])));
+    let other = Trigger {
+        segment: b"N1".to_vec(),
+        conditions: Vec::new(),
+    };
+    assert!(!bare.opens_on(&other));
 }

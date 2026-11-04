@@ -33,6 +33,74 @@ def test_segments_expose_index_id_elements_and_raw():
     assert document[-1].index == len(document) - 1
 
 
+def _segment(body):
+    delimiters = oxedi.Delimiters(release=b"?")
+    return oxedi.parse(body, delimiters=delimiters).document[0]
+
+
+def test_element_reads_a_simple_a_composite_and_a_component():
+    segment = _segment(b"XX*a*b:c:d*~")
+    assert segment.element(1) == b"a"
+    assert segment.element(2) == [b"b", b"c", b"d"]
+    assert segment.element(2, 2) == b"c"
+    assert segment.element(3) == b""
+    assert segment.has(1) and segment.has(2, 3) and segment.has(3)
+
+
+def test_element_places_the_segment_does_not_have_are_none():
+    segment = _segment(b"XX*a*b:c:d~")
+    assert segment.element(1, 1) == b"a"
+    assert segment.element(1, 2) is None
+    assert segment.element(2, 4) is None
+    assert segment.element(3) is None
+    assert not segment.has(1, 2)
+    assert not segment.has(2, 4)
+    assert not segment.has(3)
+
+
+def test_a_release_escaped_value_equals_the_elements_entry():
+    segment = _segment(b"XX*a?*b~")
+    assert segment.elements == [b"a*b"]
+    assert segment.element(1) == segment.elements[0]
+
+
+@pytest.mark.parametrize("position", [0, -1])
+def test_element_refuses_a_position_below_one(position):
+    segment = _segment(b"XX*a~")
+    message = f"Segment.element: position must be 1 or more (XX01 is 1), got {position}"
+    with pytest.raises(ValueError) as caught:
+        segment.element(position)
+    assert str(caught.value) == message
+    with pytest.raises(ValueError) as caught:
+        segment.has(position)
+    assert str(caught.value) == message.replace("Segment.element", "Segment.has")
+
+
+def test_element_with_an_integer_beyond_64_bits():
+    segment = _segment(b"XX*a~")
+    assert segment.element(2**70) is None
+    assert not segment.has(1, 2**70)
+    with pytest.raises(ValueError) as caught:
+        segment.element(-(2**70))
+    assert str(caught.value) == (
+        f"Segment.element: position must be 1 or more (XX01 is 1), got {-(2**70)}"
+    )
+    with pytest.raises(TypeError):
+        segment.element("1")
+
+
+@pytest.mark.parametrize("component", [0, -3])
+def test_element_refuses_a_component_below_one(component):
+    segment = _segment(b"XX*a~")
+    message = f"Segment.element: component must be 1 or more, got {component}"
+    with pytest.raises(ValueError) as caught:
+        segment.element(1, component)
+    assert str(caught.value) == message
+    with pytest.raises(ValueError) as caught:
+        segment.has(1, component)
+    assert str(caught.value) == message.replace("Segment.element", "Segment.has")
+
+
 def test_an_index_past_the_end_names_the_length():
     document = parse_named(EMEDNY).document
     n = len(document)

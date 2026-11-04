@@ -29,7 +29,11 @@ arrow-data = { version = "60", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "60", default-features = false, features = ["ffi"] }
 bytes = "1.9"
 self_cell = "1"
-# Without default features the stub generator never calls Python: the default
-# `infer_signature` formats default values through the interpreter, whose symbols
-# the `stub_gen` binary cannot link while PYO3_BUILD_EXTENSION_MODULE is set.
+# Without default features the build never calls Python. The `stub-gen` feature turns on
+# `infer_signature`, which formats a signature's default values through the interpreter; only
+# `make stubs` builds with it, linking libpython for that one command.
 pyo3-stub-gen = { version = "0.23", default-features = false }
+
+[features]
+# Formats the defaults of the stub through the interpreter; see the comment on `pyo3-stub-gen`.
+stub-gen = ["pyo3-stub-gen/infer_signature"]

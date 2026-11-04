@@ -130,7 +130,7 @@ fn the_checker_alone_and_inside_the_processor_raise_the_same_findings() {
         let document = Document::with_delimiters(&bytes[..], delims).unwrap();
         for spec in [&five, &four] {
             let alone = common::diagnostics_of(spec, &bytes, delims);
-            let (_, all) = oxedi_core::Processor::run(spec, &document);
+            let (_, all) = oxedi_core::Processor::run(spec, &document, None);
             let inside: Vec<_> = all
                 .into_iter()
                 .filter(|diagnostic| {

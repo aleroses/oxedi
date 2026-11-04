@@ -187,6 +187,26 @@ def test_a_rejected_file_with_leading_trivia_keeps_the_isa_as_datum():
     assert failure.datum.startswith(b"ISA*00*") and failure.datum.endswith(b"*P*>~")
 
 
+def test_a_masked_rejected_file_with_leading_trivia_keeps_only_the_isa_id_as_datum():
+    data = b"\xef\xbb\xbf\r\n" + read("multi_claim_sample.txt")
+    (failure,) = validate(data, mask=oxedi.Mask(MASK_KEY))
+    assert failure.segment == 0
+    assert failure.datum == b"ISA"
+
+
+def test_validate_does_not_project(monkeypatch):
+    import oxedi.pyx12._validate as module
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("validate projected the tables")
+
+    # validate must not hold a `parse` of its own: patching `oxedi.parse` would not reach it.
+    assert not hasattr(module, "parse")
+    monkeypatch.setattr(module, "parse", refuse, raising=False)
+    monkeypatch.setattr(oxedi, "parse", refuse)
+    assert validate(read(LEGACY))
+
+
 def test_an_error_tree_pyx12_shape_change_becomes_one_failure(monkeypatch):
     import oxedi.pyx12._validate as module
 
@@ -827,7 +847,7 @@ def test_a_finding_names_the_loops_parse_names_at_its_segment(make):
     result = oxedi.parse(data)
     findings = validate(data)
     assert findings
-    paths = oxedi._core._loop_paths(result, [f.segment for f in findings])
+    paths = oxedi._core._loop_paths(result.document, result.spec, [f.segment for f in findings])
     for finding, path in zip(findings, paths):
         assert finding.path == "/".join(f"{name}#{ordinal}" for name, ordinal in path)
     ours = {d.segment: d.path for d in result.diagnostics if d.segment is not None}
@@ -1092,7 +1112,7 @@ def test_validate_with_a_spec_names_the_loops_parse_names_with_it():
     result = oxedi.parse(data, spec=spec)
     expected = [
         "/".join(f"{name}#{number}" for name, number in path)
-        for path in oxedi._core._loop_paths(result, segments)
+        for path in oxedi._core._loop_paths(result.document, result.spec, segments)
     ]
     assert [d.path for d in found] == expected
     (on_address,) = [d for d in found if d.code == "6"]

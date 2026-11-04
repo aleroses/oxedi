@@ -5,7 +5,7 @@ mod common;
 
 use common::concat_raw;
 
-use oxedi_core::{Document, Tokenizer, frame::is_trivia};
+use oxedi_core::{Document, Tokenizer, trivia::is_trivia};
 
 /// (file, segments including a trailing trivia-only one, repetition separator).
 const SAMPLES: &[(&str, usize, Option<u8>)] = &[
