@@ -23,9 +23,12 @@ def channel(root: Path) -> str:
     """The exact version `root/rust-toolchain.toml` names."""
     path = root / TOOLCHAIN
     try:
-        found = tomllib.loads(path.read_text(encoding="utf-8")).get("toolchain", {}).get("channel", "")
+        toolchain = tomllib.loads(path.read_text(encoding="utf-8")).get("toolchain", {})
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise SystemExit(f"{PREFIX} cannot read {TOOLCHAIN} under {root}: {error}") from error
+    if not isinstance(toolchain, dict):
+        raise SystemExit(f"{PREFIX} {TOOLCHAIN} has no [toolchain] table; write [toolchain] with channel = \"X.Y.Z\"")
+    found = toolchain.get("channel", "")
     if not isinstance(found, str) or not EXACT.fullmatch(found):
         raise SystemExit(
             f"{PREFIX} {TOOLCHAIN} names no exact channel X.Y.Z (found '{found}'); "

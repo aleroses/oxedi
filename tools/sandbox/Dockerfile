@@ -39,6 +39,9 @@ ENV RUSTUP_HOME=/opt/rustup \
     PATH=/opt/cargo/bin:$PATH
 # curl is installed only for this step and purged in it.
 RUN set -eu; \
+    [ -n "$RUST_VERSION" ] || { \
+      echo "RUST_VERSION is empty; build with make sandbox-image, which reads rust-toolchain.toml" >&2; \
+      exit 1; }; \
     case "$TARGETARCH" in \
       amd64) triple=x86_64-unknown-linux-gnu; sum=$RUSTUP_INIT_SHA256_AMD64; \
              musl=x86_64-unknown-linux-musl; denysum=$CARGO_DENY_SHA256_AMD64 ;; \
@@ -80,7 +83,10 @@ RUN set -eu; \
     uv venv --python "$PYTHON_NEWEST" /opt/pip-audit; \
     uv pip install --python /opt/pip-audit/bin/python --require-hashes --no-deps --only-binary :all: \
       -r /tmp/pip-audit.txt; \
-    found=$(/opt/pip-audit/bin/pip-audit --version | awk '{ print $NF }'); \
+    version=$(/opt/pip-audit/bin/pip-audit --version) || { \
+      echo "pip-audit --version failed after installing pip-audit.txt; the build cannot check its version" >&2; \
+      exit 1; }; \
+    found=${version##* }; \
     [ "$found" = "$PIP_AUDIT_VERSION" ] || { \
       echo "pip-audit.txt installs $found but PIP_AUDIT_VERSION says $PIP_AUDIT_VERSION; set the ARG to the locked version" >&2; \
       exit 1; }; \
