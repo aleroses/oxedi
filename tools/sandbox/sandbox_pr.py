@@ -192,10 +192,17 @@ def first_gate(risk: Risk, deny: Tool) -> tuple[bool, str]:
 
 def source_gate(risk: Risk, settings: Settings) -> Confirmed:
     """Asks before cargo-deny, which resolves the change's manifests, reaches a source the change
-    adds; each source on its own line first."""
-    for url in risk.new_sources:
+    adds or reads a cargo file whose sources cannot be checked; each source and each such file on
+    its own line first."""
+    sources = risk.new_sources
+    for url in sources.urls:
         print(f"sandbox-pr: the change adds a cargo source: {url}", file=sys.stderr)
-    return confirm(bool(risk.new_sources), "cargo-deny would fetch from a source the change adds", settings)
+    for error in sources.unreadable:
+        print(f"sandbox-pr: cannot read a cargo file the change touches: {error}", file=sys.stderr)
+    found = (("cargo-deny would fetch from a source the change adds", sources.urls),
+             ("cargo-deny would read a cargo file whose sources cannot be checked", sources.unreadable))
+    reasons = [reason for reason, applies in found if applies]
+    return confirm(bool(reasons), " and ".join(reasons), settings)
 
 
 def stages(plan: Plan, risk: Risk, settings: Settings, risk_text: list[str]) -> Progress:

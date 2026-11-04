@@ -166,8 +166,18 @@ class CargoSources(unittest.TestCase):
         moved = {"crates/y/Cargo.toml": PATCHED, "Cargo.lock": NEW_LOCK}
         self.assertEqual(deps.cargo_sources(old, moved), ())
 
-    def test_an_unparseable_file_names_no_source(self):
-        self.assertEqual(deps.cargo_sources({}, {"Cargo.toml": "garbage [[", "Cargo.lock": "package = 1\n"}), ())
+    def test_a_bom_manifest_names_its_sources(self):
+        self.assertEqual(deps.cargo_sources({}, {"Cargo.toml": "\ufeff" + PATCHED}), ("https://evil/x",))
+
+    def test_an_unparseable_file_on_the_new_side_is_unreadable(self):
+        found = deps.read_cargo_sources({"Cargo.toml": PATCHED}, {"Cargo.toml": "garbage [[", "Cargo.lock": NEW_LOCK})
+        self.assertEqual(found, deps.CargoSources(
+            urls=("https://github.com/example/c",),
+            unreadable=("Cargo.toml after the change is not valid TOML: Expected '=' after a key in a key/value pair "
+                        "(at line 1, column 9)",),
+        ))
+        self.assertEqual(deps.read_cargo_sources({"Cargo.toml": "garbage [["}, {"Cargo.toml": PATCHED}),
+                         deps.CargoSources(urls=("https://evil/x",)))
 
 
 class Python(unittest.TestCase):

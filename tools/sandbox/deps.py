@@ -134,7 +134,8 @@ def strings_under(value: object, key: str) -> Iterator[str]:
 def manifest_sources(data: dict) -> set[str]:
     """The URLs a Cargo.toml names: every `git`, in a dependency table of any kind or target, in
     `[patch.*]`, `[replace]` or `[source.*]`, and the `registry` of a `[source.*]` table (a
-    dependency's `registry` is a name, not a URL)."""
+    dependency's `registry` is a name, not a URL). `git` is taken at any depth on purpose, even under
+    `[package.metadata]`: reporting one URL too many is the safe side."""
     sources = data.get("source", {})
     tables = sources.values() if isinstance(sources, dict) else ()
     return set(strings_under(data, "git")) | {url for source in tables for url in strings_under(source, "registry")}
@@ -157,27 +158,44 @@ def lock_sources(data: dict) -> set[str]:
 SOURCE_READERS = {"Cargo.toml": manifest_sources, "Cargo.lock": lock_sources}
 
 
-def source_urls(files: dict[str, str]) -> set[str]:
-    """The URLs the Cargo.toml and Cargo.lock files among `files` (path -> text) name. A file that
-    does not parse names none: cargo refuses it, so cargo-deny reaches nothing through it, and it is
-    already a manifest or a Cargo.lock finding."""
-    found = set()
-    for path, text in files.items():
+@dataclass(frozen=True)
+class CargoSources:
+    """The URLs the change's Cargo.toml and Cargo.lock files add, sorted and redacted, and why a
+    file of theirs could not be read after the change: one that cannot be read may name any
+    source, so it is asked about like a new one."""
+
+    urls: tuple[str, ...] = ()
+    unreadable: tuple[str, ...] = ()
+
+
+def source_urls(files: dict[str, str], side: str) -> tuple[set[str], tuple[str, ...]]:
+    """The URLs the Cargo.toml and Cargo.lock files among `files` (path -> text) name, and why a
+    file could not be parsed. A leading UTF-8 byte order mark is dropped, as cargo drops it."""
+    found, errors = set(), []
+    for path, text in sorted(files.items()):
         read = SOURCE_READERS.get(PurePosixPath(path).name)
         if read is None:
             continue
         try:
-            found |= read(tomllib.loads(text))
-        except tomllib.TOMLDecodeError:
-            continue
-    return found
+            found |= read(tomllib.loads(text.removeprefix("\ufeff")))
+        except tomllib.TOMLDecodeError as error:
+            errors.append(f"{path} {side} is not valid TOML: {error}")
+    return found, tuple(errors)
+
+
+def read_cargo_sources(old: dict[str, str], new: dict[str, str]) -> CargoSources:
+    """What `cargo_sources` finds, with the files that could not be parsed after the change. One
+    that cannot be parsed before the change only makes more URLs look new."""
+    before, _ = source_urls(old, "before the change")
+    after, unreadable = source_urls(new, "after the change")
+    return CargoSources(tuple(sorted({redacted(url) for url in after - before})), unreadable)
 
 
 def cargo_sources(old: dict[str, str], new: dict[str, str]) -> tuple[str, ...]:
     """The URLs the Cargo.toml and Cargo.lock files name after the change and not before (path ->
     text on each side), sorted, each URL's credentials redacted: where cargo-deny would download
     from for the first time."""
-    return tuple(sorted({redacted(url) for url in source_urls(new) - source_urls(old)}))
+    return read_cargo_sources(old, new).urls
 
 
 def requirement(line: str) -> tuple[str, str]:
@@ -364,10 +382,12 @@ def is_cargo_file(path: str) -> bool:
     return PurePosixPath(path).name in SOURCE_READERS
 
 
-def new_cargo_sources(change: Change, root: Path, paths: list[str]) -> tuple[str, ...]:
-    """The sources the Cargo.toml and Cargo.lock files among the touched `paths` add."""
+def new_cargo_sources(change: Change, root: Path, paths: list[str]) -> CargoSources:
+    """The sources the Cargo.toml and Cargo.lock files among the touched `paths` add, and the ones
+    that cannot be read after the change, not UTF-8 or not TOML."""
     cargo = [path for path in paths if is_cargo_file(path)]
     if not cargo:
-        return ()
+        return CargoSources()
     old, new = both_ends(change, root, cargo)
-    return cargo_sources(old.files, new.files)
+    found = read_cargo_sources(old.files, new.files)
+    return CargoSources(found.urls, new.errors + found.unreadable)

@@ -17,7 +17,7 @@ from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
 from arguments import ImageKind
-from deps import PackageDiff, blob
+from deps import CargoSources, PackageDiff, blob
 from layout import HOST_EXECUTED, covered
 from source import Change, git_bytes, git_text
 
@@ -173,8 +173,8 @@ class Risk:
     touched: tuple[Touched, ...]
     cargo: PackageDiff
     python: PackageDiff
-    # The URLs the change's Cargo.toml and Cargo.lock files add, sorted.
-    new_sources: tuple[str, ...]
+    # What the change's Cargo.toml and Cargo.lock files add as sources, and which cannot be read.
+    new_sources: CargoSources
 
     @property
     def flagged(self) -> bool:

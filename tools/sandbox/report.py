@@ -121,7 +121,9 @@ def risk_lines(request: Request, change: Change, risk: Risk) -> list[str]:
         lines += [f"      {kind.name}: {kind.why}" for kind in item.kinds]
     lines += package_lines("Cargo.lock packages", risk.cargo)
     lines += package_lines("declared Python packages", risk.python)
-    lines += ["new cargo sources:", *(f"  {url}" for url in risk.new_sources or ("none",))]
+    sources = risk.new_sources
+    lines += ["new cargo sources:", *(f"  {url}" for url in sources.urls or ("none",))]
+    lines += [f"  cannot read: {error}" for error in sources.unreadable]
     return lines + [f"flagged: {'yes' if risk.flagged else 'no'}"]
 
 
@@ -161,7 +163,8 @@ def report_json(report: Report) -> dict:
                     for t in report.risk.touched],
         "cargo": packages_json(report.risk.cargo),
         "python": packages_json(report.risk.python),
-        "new_sources": list(report.risk.new_sources),
+        "new_sources": list(report.risk.new_sources.urls),
+        "unreadable_cargo": list(report.risk.new_sources.unreadable),
         "cargo_deny": None if outcome.cargo_deny is None else asdict(outcome.cargo_deny),
         "pip_audit": [asdict(audit) for audit in outcome.pip_audit],
         "flagged": report.risk.flagged,

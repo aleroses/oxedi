@@ -272,13 +272,39 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.kinds(), ["deny", "fetch", "fetch", "fetch", "pip-audit", "run"])
         self.assertEqual(self.report()["confirmed"], "env")
 
+    def test_an_unreadable_cargo_file_asks_before_deny(self):
+        self.change("Cargo.toml", "garbage [[\n")
+        status, out, err = self.review()
+        self.assertEqual(status, 4, err)
+        self.assertEqual(self.runs(), [])
+        line = ("Cargo.toml after the change is not valid TOML: Expected '=' after a key in a key/value pair "
+                "(at line 1, column 9)")
+        self.assertIn(f"sandbox-pr: cannot read a cargo file the change touches: {line}\n", err)
+        self.assertIn(
+            "sandbox-pr: cargo-deny would read a cargo file whose sources cannot be checked; there is no terminal "
+            "to ask, so it stops with exit 4", err)
+        self.assertIn(f"new cargo sources:\n  none\n  cannot read: {line}\n", out)
+        report = self.report()
+        self.assertEqual((report["new_sources"], report["unreadable_cargo"], report["confirmed"]),
+                         ([], [line], "refused"))
+
+    def test_a_non_utf8_manifest_asks_before_deny(self):
+        (self.host / "Cargo.toml").write_bytes(b"\xff\xfe")
+        git(self.host, "add", "Cargo.toml")
+        git(self.host, "commit", "-q", "-m", "binary manifest")
+        status, _, err = self.review()
+        self.assertEqual(status, 4, err)
+        self.assertEqual(self.runs(), [])
+        self.assertIn("sandbox-pr: cannot read a cargo file the change touches: Cargo.toml after the change is not "
+                      "UTF-8 text: ", err)
+
     def test_no_new_source_asks_nothing_before_deny(self):
         self.change("crates/oxedi_core/src/lib.rs", "pub fn g() {}\n")
         status, out, err = self.review()
         self.assertEqual(status, 0, err)
         self.assertNotIn("cargo source", err)
         self.assertIn("new cargo sources:\n  none\n", out)
-        self.assertEqual(self.report()["new_sources"], [])
+        self.assertEqual((self.report()["new_sources"], self.report()["unreadable_cargo"]), ([], []))
 
     def review_text(self) -> str:
         found = sorted(self.reviews().glob("ref-feature-*/report.txt"))
