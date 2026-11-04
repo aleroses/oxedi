@@ -19,8 +19,10 @@
 //! `tables`, `balance` and `summaries` hold the definitions,
 //! `occurrence_error`, `table_error`, `balance_error` and `summary_error` why
 //! an occurrence, a table, a balancing rule or a summary is rejected; `raw`
-//! the deserialization shapes; `schema` the columns of each table, known from the spec alone; `sections` the JSON shape as data and `shape`
-//! the walk that checks a value against it; `build` the construction of a
+//! the deserialization shapes; `schema` the columns of each table, known from
+//! the spec alone; `sections` the JSON shape as data and `shape` the walk that
+//! checks a value against it; `test_support` (test builds only) the small spec
+//! shared by the spec and projector tests; `build` the construction of a
 //! [`Spec`] as a pipeline of steps, `build_loops` the compilation of one loop,
 //! `compile` that of the tables and `columns` that of one table column;
 //! `phi` the check of the columns flagged as patient data and of the seed
