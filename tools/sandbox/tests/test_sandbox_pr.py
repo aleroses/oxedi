@@ -18,6 +18,8 @@ sys.path.insert(0, str(HERE.parent))
 import sandbox  # noqa: E402
 import sandbox_pr  # noqa: E402
 import source  # noqa: E402
+import storage  # noqa: E402
+from test_lock import hold, holder_text  # noqa: E402
 from test_sandbox import make_repo_copy  # noqa: E402
 from test_source import FILE_TRANSPORT, commit, git, new_repo  # noqa: E402
 
@@ -367,6 +369,23 @@ class Flow(unittest.TestCase):
         self.assertIn(f"type=bind,src={HOST_DENY},dst=/sandbox/deny.toml,readonly", deny["argv"])
         self.assertEqual(self.report()["touched"], [{"path": "tools/sandbox/deny.toml", "status": "M",
                                                      "kinds": ["HOST_EXECUTED"]}])
+
+    def test_a_second_review_of_the_same_change_is_refused(self):
+        self.change("crates/oxedi_core/src/lib.rs", "pub fn g() {}\n")
+        tested = git(self.host, "rev-parse", "feature")
+        self.reviews().mkdir(parents=True)
+        clone = self.reviews().resolve() / f"ref-feature-{tested[:12]}"
+        own = storage.own_dir(self.home / ".cache" / "oxedi-sandbox", clone / "checkout")
+        holder, _ = hold(self, own)
+        status, _, err = self.review()
+        self.assertEqual(status, 2, err)
+        self.assertEqual(
+            err,
+            f"sandbox-pr: another review of this change and commit is in progress ({holder_text(own, holder.pid)}); "
+            "wait for it to end\n",
+        )
+        self.assertEqual(self.runs(), [])
+        self.assertFalse(clone.exists())
 
     def test_rerun_starts_from_an_empty_target(self):
         self.change("crates/oxedi_core/src/lib.rs", "pub fn g() {}\n")

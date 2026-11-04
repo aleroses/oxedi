@@ -33,6 +33,7 @@ import re
 import subprocess
 import sys
 from collections.abc import MutableMapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from audit import DIRTY_STATUS  # noqa: E402
 from deps import blob, dependency_diffs, new_cargo_sources, toml  # noqa: E402
 from layout import SandboxError, container_name  # noqa: E402
 from lifecycle import refuse_if_running, run_container  # noqa: E402
+from lock import RunLock  # noqa: E402
 from report import (  # noqa: E402
     Confirmed, Progress, Ran, Report, Tool, VenvAudit, deny_lines, hint_lines, pip_audit_lines, risk_lines,
     write_reports,
@@ -53,7 +55,7 @@ from sandbox import (  # noqa: E402
     Plan, Stopped, audited, checked_daemon, fetch_phase, install_stop_handlers, ready, run_phase,
 )
 from source import GIT_ENV, GIT_OPTIONS, Change, Request, clone, isolated_git  # noqa: E402
-from storage import cache_root, clean, forget, reviews  # noqa: E402
+from storage import cache_root, clean, own_dir, renew, reviews  # noqa: E402
 
 NOT_CONFIRMED_STATUS = 4
 DEFAULT_TARGET = "make gates && make py-test"
@@ -124,9 +126,11 @@ def source_checkout(host: Path, env: dict[str, str]) -> Path:
     return path
 
 
-def fresh_clone(cache: Path, source: Path, request: Request) -> tuple[Change, Path]:
-    """Clones the change into `prs/.<id>-incoming`, then, once the tested commit is known, removes
-    the old `prs/<id>-<sha12>/` with its storage and moves the clone there as `checkout/`."""
+def fresh_clone(cache: Path, source: Path, request: Request, held: ExitStack) -> tuple[Change, Path]:
+    """Clones the change into `prs/.<id>-incoming`, then, once the tested commit is known, takes
+    the run lock of its clone's storage into `held`, removes the old `prs/<id>-<sha12>/` with its
+    storage and moves the clone there as `checkout/`. A second review of the same change and commit
+    is refused while the first holds that lock."""
     root = reviews(cache)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     root = root.resolve()
@@ -134,8 +138,11 @@ def fresh_clone(cache: Path, source: Path, request: Request) -> tuple[Change, Pa
     clean(incoming)
     change = clone(source, request, incoming)
     review = root / f"{change.label}-{change.tested[:12]}"
+    held.enter_context(RunLock(
+        own_dir(cache, review / "checkout"),
+        whose="another review of this change and commit", advice="wait for it to end"))
     refuse_if_running(container_name(review / "checkout"))
-    forget(cache, review)
+    renew(cache, review)
     review.mkdir(mode=0o700)
     incoming.rename(review / "checkout")
     return change, review / "checkout"
@@ -256,14 +263,15 @@ def review_change(image: str, kind: ImageKind, host: Path, env: dict[str, str]) 
     require_git()
     source = source_checkout(host, env)
     info = checked_daemon()
-    change, root = fresh_clone(cache_root(env), source, settings.request)
-    require_contributor_group(change, root)
-    plan = ready(image, kind, root, env, info)
-    risk = assess(change, root)
-    hint = image_hint(list(risk.touched), kind)
-    # The terminal's risk report ends with the hint, so it shows before the first confirmation.
-    risk_text = risk_lines(settings.request, change, risk) + hint_lines(hint)
-    outcome, findings = audited(plan, lambda: stages(plan, risk, settings, risk_text))
+    with ExitStack() as held:
+        change, root = fresh_clone(cache_root(env), source, settings.request, held)
+        require_contributor_group(change, root)
+        plan = ready(image, kind, root, env, info)
+        risk = assess(change, root)
+        hint = image_hint(list(risk.touched), kind)
+        # The terminal's risk report ends with the hint, so it shows before the first confirmation.
+        risk_text = risk_lines(settings.request, change, risk) + hint_lines(hint)
+        outcome, findings = audited(plan, lambda: stages(plan, risk, settings, risk_text))
     run = Ran(settings.target, outcome.status, tuple(findings.lines())) if outcome.ran else None
     write_reports(root.parent, Report(settings.request, change, risk, outcome, run, image, plan.runtime.value, hint))
     return DIRTY_STATUS if findings.dirty else outcome.status
