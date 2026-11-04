@@ -167,7 +167,13 @@ button.link {
 }
 #mask:checked { background: var(--accent); }
 #mask:checked::before { background: var(--accent-text); transform: translateX(18px); }
-.intake { display: flex; flex-wrap: wrap; gap: var(--space-12); align-items: stretch; }
+.intake {
+  display: flex; flex-wrap: wrap; gap: var(--space-12); align-items: stretch;
+  padding: var(--space-12) var(--space-16);
+  border: var(--border); border-radius: var(--radius-lg);
+  background: var(--glass); backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-card, none);
+}
 .drop {
   flex: 1 1 18rem;
   position: relative;
