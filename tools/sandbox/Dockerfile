@@ -73,12 +73,17 @@ RUN set -eu; \
 ENV UV_PYTHON_DOWNLOADS=never
 
 # pip-audit lives in its own venv on the newest CPython, from hashed wheels only. This file is read
-# by `make sandbox-image` for the tag, together with the Dockerfile.
+# by `make sandbox-image` for the tag, together with the Dockerfile. The installed version must be the
+# one the label names.
 COPY pip-audit.txt /tmp/pip-audit.txt
 RUN set -eu; \
     uv venv --python "$PYTHON_NEWEST" /opt/pip-audit; \
     uv pip install --python /opt/pip-audit/bin/python --require-hashes --no-deps --only-binary :all: \
       -r /tmp/pip-audit.txt; \
+    found=$(/opt/pip-audit/bin/pip-audit --version | awk '{ print $NF }'); \
+    [ "$found" = "$PIP_AUDIT_VERSION" ] || { \
+      echo "pip-audit.txt installs $found but PIP_AUDIT_VERSION says $PIP_AUDIT_VERSION; set the ARG to the locked version" >&2; \
+      exit 1; }; \
     ln -s /opt/pip-audit/bin/pip-audit /usr/local/bin/pip-audit; \
     rm /tmp/pip-audit.txt; \
     chmod -R a+rX /opt/pip-audit
