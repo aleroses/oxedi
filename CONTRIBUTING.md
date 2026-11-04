@@ -462,7 +462,8 @@ include `extension-ci-tools`' makefiles), and every tracked `Cargo.toml`, `Cargo
 tracked file a host tool loads by its name alone: `conftest.py`, `pytest.ini`, `setup.cfg`,
 `tox.ini`, `noxfile.py`, `sitecustomize.py`, `usercustomize.py` and `.envrc`. The names make and
 pytest load from the root, `GNUmakefile`, `makefile` and `conftest.py`, are read-only when present;
-when absent, the run phase binds an empty read-only file over each, so the run cannot create one.
+when absent, the run phase binds a read-only stand-in over each, so the run cannot create one; the
+stand-ins of the two make names include the next name, so make in the run still reads `Makefile`.
 While the run lasts, the checkout holds a placeholder of each name, one line that says what it is,
 removed when the run ends. A runner killed before then (SIGKILL, an out-of-memory kill, a power
 loss) leaves them: a host `make` then stops with the placeholder's own line,

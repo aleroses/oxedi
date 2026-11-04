@@ -6,7 +6,7 @@ directory and every submodule (the host's make targets include their makefiles),
 are, among them every tracked file a host tool loads by its name alone (pytest a `conftest.py`,
 Python a `sitecustomize.py`, direnv an `.envrc`). A name the host loads from the root
 (`GNUmakefile`, `makefile`, `conftest.py`) is read-only when present; when absent, the run phase
-binds an empty read-only file over it, so the run cannot create it. Hidden, in both phases: the
+binds a read-only stand-in over it, so the run cannot create it. Hidden, in both phases: the
 maintainers' notes and every path git ignores, except the sandbox's own outputs, so a run can
 neither read nor change them. An ignored directory is masked by an empty read-only tmpfs; an
 ignored file has an empty read-only file bound over it. A directory git ignores as a whole (it
@@ -22,8 +22,12 @@ from pathlib import Path, PurePosixPath
 
 # Names the host loads from the root without being told: make reads GNUmakefile and makefile before
 # Makefile, and pytest a conftest.py of the root it starts in. Present, each is bound read-only;
-# absent, the run phase binds an empty read-only file over it, so the run cannot create one.
+# absent, the run phase binds a read-only stand-in over it, so the run cannot create one.
 ROOT_LOADED = ("GNUmakefile", "makefile", "conftest.py")
+# What the run reads at each absent root name. Make reads only the first of GNUmakefile, makefile
+# and Makefile it finds, so each make stand-in includes the next name, and make in the run reads
+# the makefile the host would; an empty conftest.py changes nothing.
+STAND_INS = {"GNUmakefile": "-include makefile\n", "makefile": "-include Makefile\n", "conftest.py": ""}
 # What the host executes or trusts after a run: bound read-only over the checkout.
 HOST_EXECUTED = (
     "Makefile", "make", "tools", ".cargo", ".github", "rust-toolchain.toml", "Cargo.toml",

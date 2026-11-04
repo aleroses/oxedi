@@ -123,9 +123,8 @@ def read_only_set(checkout: Checkout, storage: Storage, skip: tuple[str, ...], k
 
 
 def placeholder_binds(checkout: Checkout, storage: Storage) -> list[str]:
-    """The empty read-only file over each absent root name the host loads: the run cannot create
-    one."""
-    return [a for name in checkout.placeholders for a in bind(storage.empty, f"{WORK}/{name}", True)]
+    """The read-only stand-in over each absent root name the host loads: the run cannot create one."""
+    return [a for name in checkout.placeholders for a in bind(storage.stand_ins / name, f"{WORK}/{name}", True)]
 
 
 def network_delta(checkout: Checkout, storage: Storage, kind: ImageKind, writable: tuple[str, ...]) -> list[str]:

@@ -1,9 +1,9 @@
 """The root names the run phase holds: host files for the read-only binds over absent names.
 
-Docker binds the empty file of the storage over each absent root name host tools load
-(`layout.ROOT_LOADED`), and would create the missing mount point in the checkout as root. So the
+Docker binds a stand-in of the storage over each absent root name host tools load
+(`layout.STAND_INS`), and would create the missing mount point in the checkout as root. So the
 runner creates each one first, as the user, with a fixed body that explains itself, and removes
-it once the run is over. The container never sees that body, only the empty file bound over it.
+it once the run is over. The container never sees that body, only the stand-in bound over it.
 
 A runner killed before it removes them (SIGKILL, an out-of-memory kill, a power loss) leaves them
 behind: a `GNUmakefile` or `makefile` stops every host make with its own line, and the list of

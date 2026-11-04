@@ -299,12 +299,12 @@ class Arguments(World):
 
     def test_absent_root_names_held_in_the_run_only(self):
         checkout = self.checkout("c", "Makefile")
-        empty = str(self.own(checkout) / "empty")
+        stand_ins = self.own(checkout) / "stand-ins"
         run = self.phase_args(arguments.Phase.RUN, checkout)
         for name in ("GNUmakefile", "makefile", "conftest.py"):
             with self.subTest(name=name):
                 mount = mount_at(run, f"/work/{name}")
-                self.assertEqual((mount["type"], mount["src"]), ("bind", empty))
+                self.assertEqual((mount["type"], mount["src"]), ("bind", str(stand_ins / name)))
                 self.assertIn("readonly", mount)
         for phase in (arguments.Phase.FETCH, arguments.Phase.AUDIT):
             with self.subTest(phase=phase):
@@ -317,7 +317,23 @@ class Arguments(World):
         conftest = mount_at(run, "/work/conftest.py")
         self.assertEqual((conftest["src"], "readonly" in conftest), (str(checkout / "conftest.py"), True))
         self.assertEqual(mount_at(run, "/work/GNUmakefile")["src"], str(checkout / "GNUmakefile"))
-        self.assertEqual(mount_at(run, "/work/makefile")["src"], str(self.own(checkout) / "empty"))
+        self.assertEqual(mount_at(run, "/work/makefile")["src"], str(self.own(checkout) / "stand-ins" / "makefile"))
+
+    @unittest.skipUnless(shutil.which("make"), "needs make")
+    def test_make_in_the_run_reads_the_checkouts_makefile(self):
+        """Make reads the first of GNUmakefile, makefile and Makefile it finds; with the stand-ins
+        bound over the absent names it still reaches the target of the checkout's own makefile."""
+        for present in ("Makefile", "makefile"):
+            with self.subTest(present=present):
+                root = self.tmp / f"make-{present}"
+                root.mkdir()
+                (root / present).write_text(f"gates:\n\t@echo gates from {present}\n")
+                for name in ("GNUmakefile", "makefile"):
+                    if not (root / name).exists():
+                        (root / name).write_text(layout.STAND_INS[name])
+                done = subprocess.run(["make", "-s", "-C", str(root), "gates"], capture_output=True, text=True,
+                                      env={"PATH": os.environ["PATH"]})
+                self.assertEqual((done.returncode, done.stdout), (0, f"gates from {present}\n"), done.stderr)
 
     def test_ignored_paths_masked_outputs_not(self):
         outputs = [
@@ -544,11 +560,13 @@ class Runner(World):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("held in the run: GNUmakefile, makefile, conftest.py", result.stderr)
         call = [c for c in self.runs() if "bash" in c["argv"]][0]
-        empty = str(self.own(checkout) / "empty")
-        for name in ("GNUmakefile", "makefile", "conftest.py"):
+        bodies = {"GNUmakefile": "-include makefile\n", "makefile": "-include Makefile\n", "conftest.py": ""}
+        for name, body in bodies.items():
             with self.subTest(name=name):
-                self.assertEqual(mount_at(call["argv"], f"/work/{name}")["src"], empty)
-                self.assertIs(call["binds"][empty]["mount_point"], True)
+                stand_in = self.own(checkout) / "stand-ins" / name
+                self.assertEqual(mount_at(call["argv"], f"/work/{name}")["src"], str(stand_in))
+                self.assertIs(call["binds"][str(stand_in)]["mount_point"], True)
+                self.assertEqual(stand_in.read_text(), body)
                 self.assertFalse(os.path.lexists(checkout / name))
         self.assertNotIn("the run left a new path", result.stderr)
 
