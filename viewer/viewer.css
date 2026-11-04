@@ -137,6 +137,7 @@ button, select, input[type="search"] {
 button { cursor: pointer; }
 button:disabled { opacity: 0.5; cursor: default; }
 #sample {
+  display: inline-flex; align-items: center; justify-content: center; width: 100%;
   background: var(--gradient-accent);
   color: var(--accent-text);
   border-color: transparent;
@@ -147,7 +148,7 @@ button.link {
 }
 
 .mask-toggle {
-  display: flex; gap: var(--space-8); align-items: center; max-width: 100%;
+  display: flex; gap: var(--space-8); align-items: center; width: 100%; max-width: 100%;
   padding: var(--space-8) var(--space-12); border: var(--border); border-radius: var(--radius-lg);
   background: var(--glass); backdrop-filter: blur(var(--glass-blur));
   cursor: pointer;
@@ -168,13 +169,14 @@ button.link {
 #mask:checked { background: var(--accent); }
 #mask:checked::before { background: var(--accent-text); transform: translateX(18px); }
 .intake {
-  display: flex; flex-direction: column; flex-wrap: wrap; gap: var(--space-16); align-items: stretch;
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-16); align-items: stretch;
   padding: var(--space-16);
   border: var(--border); border-radius: var(--radius-lg);
   background: var(--glass); backdrop-filter: blur(var(--glass-blur));
   box-shadow: var(--shadow-card, none);
 }
 .drop {
+  grid-column: 1 / -1;
   flex: none;
   position: relative;
   display: flex; flex-direction: column; gap: 2px; justify-content: center;
@@ -193,6 +195,7 @@ main:has(#results:not([hidden])) .drop {
   position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden;
 }
 .drop-title { display: inline-flex; align-items: center; gap: var(--space-8); font-weight: var(--weight-semibold); }
+#mask-note { grid-column: 1 / -1; }
 
 .status { margin: var(--space-12) 0; font-weight: var(--weight-semibold); }
 .alert {
@@ -276,6 +279,10 @@ main:has(#results:not([hidden])) .drop {
 .tree .tag { color: var(--muted); }
 .tree .ids button.link { margin-right: var(--space-6); }
 
+@media (max-width: 640px) {
+  .intake { grid-template-columns: 1fr; }
+  #sample, .mask-toggle { grid-column: 1 / -1; }
+}
 @media (max-width: 480px) {
   body { font-size: 14px; }
   .top, main { padding: 0 var(--space-12); }
