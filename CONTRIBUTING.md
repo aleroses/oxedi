@@ -400,7 +400,9 @@ make sandbox-clean                # remove this checkout's storage; ALL=1 remove
 literal `$`. `CMD` for `sandbox`, and `PR`, `REF`, `HEAD`, `TARGET` and `CONFIRM` for `sandbox-pr`,
 are read from the command line only, like `IMAGE`: one left in your shell is refused with exit 2
 and one line before any docker command, for example `sandbox-pr: CONFIRM is read from the command
-line only; pass it as make sandbox-pr CONFIRM=yes`.
+line only; pass it as make sandbox-pr CONFIRM=yes`. GNU make takes a variable assigned in an
+exported `MAKEFLAGS` or `GNUMAKEFLAGS` as one from the command line, so the top-level make refuses
+those too, `IMAGE` included, naming the variable and saying to unset the one that holds it.
 
 **What the container is.** A pinned image (`tools/sandbox/Dockerfile`: Ubuntu 24.04, the Rust
 version CI gates with as `ARG RUST_VERSION`, CPython 3.11 and 3.13, uv, cargo-deny and pip-audit;
@@ -514,8 +516,9 @@ make sandbox-pr PR=251 CONFIRM=yes             # go on without asking when somet
 make sandbox-pr PR=251 IMAGE=viewer TARGET="make viewer-test"   # in the viewer image
 ```
 
-Those variables are read from the command line only, as the `sandbox` section says. It clones this checkout into a throwaway directory and fetches the pull request anonymously over
-HTTPS from the GitHub repository your `origin` names. With `PR`, it tests the merge ref; when
+Those variables are read from the command line only, as the `sandbox` section says. It clones
+this checkout into a throwaway directory and fetches the pull request anonymously over HTTPS from
+the GitHub repository your `origin` names. With `PR`, it tests the merge ref; when
 there is none (the pull request has conflicts or is closed), it refuses and says to set `HEAD=1`.
 Every `git` it runs on the clone runs without your global and system git configuration, hooks,
 attributes file or file transport, so a filter or hook the change names never runs on your

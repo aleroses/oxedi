@@ -422,6 +422,31 @@ class Runner(World):
         self.assertEqual(argv[-3:-1], ["bash", "-c"])
         self.assertEqual(argv[-1], 'mkdir -p "$HOME" && cargo test -p oxedi_core --lib value:: && echo "a b; c" $HOME')
 
+    def test_a_variable_from_an_exported_makeflags_is_refused(self):
+        checkout = make_repo_copy(self.tmp / "repo")
+        cases = (
+            ("sandbox-pr", ["REF=x"], {"MAKEFLAGS": "CONFIRM=yes"}, "sandbox-pr: CONFIRM comes from MAKEFLAGS in "
+             "the environment; unset MAKEFLAGS and pass it as make sandbox-pr CONFIRM=yes"),
+            ("sandbox-pr", ["REF=x"], {"GNUMAKEFLAGS": "CONFIRM=yes"}, "sandbox-pr: CONFIRM comes from GNUMAKEFLAGS "
+             "in the environment; unset GNUMAKEFLAGS and pass it as make sandbox-pr CONFIRM=yes"),
+            ("sandbox-pr", [], {"MAKEFLAGS": "-k -- PR:=7"}, "sandbox-pr: PR comes from MAKEFLAGS in the "
+             "environment; unset MAKEFLAGS and pass it as make sandbox-pr PR=251"),
+            ("sandbox", ["CMD=true"], {"MAKEFLAGS": "IMAGE=viewer"}, "sandbox: IMAGE comes from MAKEFLAGS in the "
+             "environment; unset MAKEFLAGS and pass it as make sandbox IMAGE=viewer"),
+            ("sandbox", [], {"MAKEFLAGS": "CMD=true"}, "sandbox: CMD comes from MAKEFLAGS in the environment; "
+             'unset MAKEFLAGS and pass it as make sandbox CMD="make gates"'),
+            ("sandbox-check", [], {"GNUMAKEFLAGS": "IMAGE=viewer"}, "sandbox-check: IMAGE comes from GNUMAKEFLAGS "
+             "in the environment; unset GNUMAKEFLAGS and pass it as make sandbox-check IMAGE=viewer"),
+        )
+        for target, args, env, line in cases:
+            with self.subTest(target=target, env=env):
+                result = self.make(checkout, target, *args, **env)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(result.stderr.splitlines()[0], line)
+                self.assertEqual(self.calls(), [])
+        result = self.make(checkout, "sandbox", "CMD=true", MAKEFLAGS="-k")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_image_built_when_missing(self):
         result = self.make(make_repo_copy(self.tmp / "repo"), "sandbox", "CMD=true", FAKE_NO_IMAGE="1")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
