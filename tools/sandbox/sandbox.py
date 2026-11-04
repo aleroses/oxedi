@@ -28,8 +28,8 @@ The command comes from SANDBOX_CMD. SANDBOX_CPUS (default: the daemon's CPUs min
 SANDBOX_MEMORY (GB; default 60 % of the daemon's memory) and SANDBOX_TIMEOUT (seconds; default
 3600) set the limits.
 Exit status: the command's; 3 when the audit found a change, a new path or a path it cannot read
-(whatever the command's status); 124 when it ran past the timeout; 130 on Ctrl-C (SIGINT) and
-143 on SIGTERM; 2 when the sandbox refuses to start.
+(whatever the command's status); 124 when it ran past the timeout; 130 on Ctrl-C (SIGINT), 143
+on SIGTERM and 129 on SIGHUP (a closed terminal); 2 when the sandbox refuses to start.
 """
 
 import argparse
@@ -55,14 +55,15 @@ from layout import Checkout, SandboxError, container_name, path_hash, refuse_lin
 from lifecycle import (  # noqa: E402
     DaemonInfo, daemon_info, explain, image_labels, limits_from, refuse_if_running, run_container, running,
 )
-from storage import Storage, cache_root, clean, empty_dir, placeholders, prepare, storage_for  # noqa: E402
+from hold import clear_leftovers, placeholders  # noqa: E402
+from storage import Storage, cache_root, clean, empty_dir, held_for, prepare, storage_for  # noqa: E402
 
 FETCH_BUDGET_S = 600
 # The Playwright version the viewer image's browser was installed for.
 PLAYWRIGHT_LABEL = "oxedi.sandbox.playwright"
 # The signals that stop the runner the way Ctrl-C does: the container is killed and the checkout
 # audited before it exits 128 + the signal's number.
-STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 class Stopped(BaseException):
@@ -108,7 +109,7 @@ def describe(plan: Plan, labels: dict[str, str]) -> str:
         f"read-only: {', '.join(plan.checkout.read_only) or 'none'}",
         f"masked: {', '.join(plan.checkout.masked) or 'none'}",
         f"hidden: {', '.join(plan.checkout.hidden) or 'none'}",
-        f"held empty in the run: {', '.join(plan.checkout.placeholders) or 'none'}",
+        f"held in the run: {', '.join(plan.checkout.placeholders) or 'none'}",
     ])
 
 
@@ -134,7 +135,7 @@ def fetch_phase(plan: Plan) -> int:
 
 def run_phase(plan: Plan, command: str) -> int:
     started = time.monotonic()
-    with placeholders(plan.checkout.root, plan.checkout.placeholders):
+    with placeholders(plan.checkout.root, plan.storage.held, plan.checkout.placeholders):
         outcome = run_container(plan.argv(Phase.RUN, run_command(command)), plan.checkout.name,
                                 plan.limits.timeout_s)
     print(f"sandbox: run took {time.monotonic() - started:.1f} s", file=sys.stderr)
@@ -240,12 +241,15 @@ def ready(image: str, kind: ImageKind, checkout_dir: Path, env: dict[str, str], 
     the checkout's Playwright and wasm tools), no container of the checkout runs and no path of its
     last dirty audit is left. Its storage is made and the plan printed."""
     runtime = Runtime.RUNSC if Runtime.RUNSC.value in info.runtimes else Runtime.RUNC
+    # A running container of this checkout holds its placeholders; once none runs, any listed is a
+    # killed run's, cleared before the survey would take it for the checkout's own file.
+    refuse_if_running(container_name(checkout_dir))
+    clear_leftovers(checkout_dir, held_for(cache_root(env), checkout_dir))
     checkout = survey(checkout_dir)
     plan = Plan(image, kind, checkout, storage_for(cache_root(env), checkout), runtime, limits_from(env, info))
     labels = image_labels(image)
     if kind is ImageKind.VIEWER:
         refuse_stale_image(checkout.root, labels)
-    refuse_if_running(checkout.name)
     refuse_leftovers(checkout.root, plan.storage.record)
     prepare(plan.storage, checkout, ("target", *own_dirs(kind)))
     print(describe(plan, labels), file=sys.stderr)

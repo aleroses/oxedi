@@ -33,7 +33,7 @@ is the runner; its parts are `layout.py` (which paths are read-only, masked or h
 `storage.py` (the storage on the host and `make sandbox-clean`), `arguments.py` (the `docker run`
 arguments of each phase, for either image), `lifecycle.py` (the daemon, the limits, one container's run and kill)
 and `audit.py` (what a run changed or left in the checkout, and the record that blocks the next
-start until it is gone). `guard.py` reads that record for `make/common.mk`: the top-level host
+start until it is gone). `hold.py` makes the placeholders of the root names a run cannot create and clears those a killed run left. `guard.py` reads that record for `make/common.mk`: the top-level host
 `make` refuses while a path it names is unreviewed. `rust_version.py` reads the Rust version of the
 image from `rust-toolchain.toml`. `isolation-check.sh` runs inside the
 container for `make sandbox-check`. `audit-tools-check.sh` is `make sandbox-tools-check`: it fetches

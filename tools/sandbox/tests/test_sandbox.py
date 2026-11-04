@@ -542,7 +542,7 @@ class Runner(World):
         checkout = self.checkout()
         result = self.sandbox(checkout)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("held empty in the run: GNUmakefile, makefile, conftest.py", result.stderr)
+        self.assertIn("held in the run: GNUmakefile, makefile, conftest.py", result.stderr)
         call = [c for c in self.runs() if "bash" in c["argv"]][0]
         empty = str(self.own(checkout) / "empty")
         for name in ("GNUmakefile", "makefile", "conftest.py"):
@@ -686,6 +686,17 @@ class Runner(World):
         name = f"oxedi-sandbox-{layout.path_hash(checkout)}"
         self.assertIn(["kill", name], [c["argv"] for c in self.calls()])
 
+    def test_sighup_kills_and_removes_the_placeholders(self):
+        checkout = self.checkout()
+        process = self.start(checkout, FAKE_RUN_SLEEP="30")
+        self.wait_for_run()
+        self.assertTrue((checkout / "GNUmakefile").exists())
+        process.send_signal(signal.SIGHUP)
+        _, err = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, 129, err)
+        self.assertIn("sandbox: interrupted by SIGHUP; the container, if it had started, was killed", err)
+        self.assertEqual([n for n in ("GNUmakefile", "makefile", "conftest.py") if (checkout / n).exists()], [])
+
     def test_sigterm_kills(self):
         checkout = self.checkout()
         process = self.start(checkout, FAKE_RUN_SLEEP="30")
@@ -782,36 +793,6 @@ UV_INSTALL = [
     "uv", "pip", "install", "--python", "/work/.venv/bin/python", "--no-build",
     "--group", "crates/oxedi_py/pyproject.toml:contributor",
 ]
-
-
-class Placeholders(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
-        self.addCleanup(self._tmp.cleanup)
-
-    def test_each_name_is_an_empty_file_during_the_run_only(self):
-        with storage.placeholders(self.root, ("GNUmakefile", "conftest.py")):
-            for name in ("GNUmakefile", "conftest.py"):
-                self.assertEqual((self.root / name).read_bytes(), b"")
-        self.assertEqual(sorted(os.listdir(self.root)), [])
-
-    def test_a_name_that_appeared_is_refused(self):
-        (self.root / "makefile").write_text("all:\n")
-        with self.assertRaises(layout.SandboxError) as caught, storage.placeholders(self.root, ("makefile",)):
-            pass
-        self.assertTrue(str(caught.exception).startswith(
-            f"cannot make the empty makefile the run binds over in {self.root}: "), caught.exception)
-        self.assertEqual((self.root / "makefile").read_text(), "all:\n")
-
-    @unittest.skipIf(os.geteuid() == 0, "root removes files from a read-only directory")
-    def test_what_cannot_be_removed_is_one_line(self):
-        self.addCleanup(self.root.chmod, 0o700)
-        with self.assertRaises(layout.SandboxError) as caught, storage.placeholders(self.root, ("GNUmakefile",)):
-            self.root.chmod(0o500)
-        self.assertEqual(
-            str(caught.exception),
-            f"cannot remove {self.root / 'GNUmakefile'} (Permission denied), made empty for the run; remove it by hand")
 
 
 class Fetch(World):

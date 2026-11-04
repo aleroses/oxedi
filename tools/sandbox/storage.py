@@ -3,10 +3,7 @@ empty file bound over every ignored file and the record of the last dirty audit.
 
 import os
 import shutil
-import stat
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +27,8 @@ class Storage:
     empty: Path
     # The paths the last dirty audit named, with what each was then; never mounted.
     record: Path
+    # The root names the run phase holds, written before they are made; never mounted.
+    held: Path
 
     @property
     def advisory(self) -> Path:
@@ -55,12 +54,18 @@ def record_for(cache: Path, root: Path) -> Path:
     return own_dir(cache, root) / "audit.json"
 
 
+def held_for(cache: Path, root: Path) -> Path:
+    """Where the names the run phase holds in the checkout at `root` are listed while it runs."""
+    return own_dir(cache, root) / "held.json"
+
+
 def storage_for(cache: Path, checkout: Checkout) -> Storage:
     refuse_unsafe(cache, "storage")
     own = own_dir(cache, checkout.root)
     return Storage(
         cache, cache / "cargo", cache / "uv", own / "target", own / "venv", own / "venv-docs",
         own / "viewer-pkg", own / "empty", record_for(cache, checkout.root),
+        held_for(cache, checkout.root),
     )
 
 
@@ -97,43 +102,6 @@ def prepare(storage: Storage, checkout: Checkout, mount_points: tuple[str, ...])
     if os.path.lexists(storage.empty):
         remove(storage.empty)
     storage.empty.touch(mode=0o444)
-
-
-@contextmanager
-def placeholders(root: Path, names: tuple[str, ...]) -> Iterator[None]:
-    """Creates each absent name of the checkout as an empty file, as the user, for the run phase to
-    bind over (docker would otherwise create the mount point as root), and removes each again once
-    the run is over, so the audit never sees it. One that is no longer an empty file is left for
-    the audit to report."""
-    made = []
-    try:
-        for name in names:
-            try:
-                (root / name).touch(mode=0o444, exist_ok=False)
-            except OSError as error:
-                raise SandboxError(f"cannot make the empty {name} the run binds over in {root}: {error}; "
-                                   "if it appeared since the sandbox started, review it and retry") from error
-            made.append(name)
-        yield
-    finally:
-        failures = [failure for failure in (unhold(root, name) for name in made) if failure]
-        if failures:
-            raise SandboxError(f"cannot remove {', '.join(failures)}, made empty for the run; remove it by hand")
-
-
-def unhold(root: Path, name: str) -> str:
-    """Removes the placeholder `name` when it is still an empty regular file; `name (why)` when it
-    cannot, else an empty string."""
-    path = root / name
-    try:
-        info = os.lstat(path)
-        if stat.S_ISREG(info.st_mode) and info.st_size == 0:
-            path.unlink()
-    except FileNotFoundError:
-        return ""
-    except OSError as error:
-        return f"{root / name} ({error.strerror or error})"
-    return ""
 
 
 def is_tree(path: Path) -> bool:

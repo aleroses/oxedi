@@ -210,8 +210,9 @@ Prerequisites: [rustup](https://rustup.rs), Python 3.11 or later, and
 The Rust version lives in one place: the `channel` of `rust-toolchain.toml`, an exact `X.Y.Z`
 with clippy and rustfmt. rustup installs it on the first `cargo` command in the checkout, and CI
 and the sandbox image read it from that file, so clippy and fmt give the same result on your
-machine, in CI and in the sandbox. A bump changes that line only, in a pull request of its own
-(see [Bumping Rust](#sandbox) in the Sandbox section).
+machine, in CI and in the sandbox. Nothing else names the version, so a bump edits only that line
+of `rust-toolchain.toml`, in a pull request of its own (see [Bumping Rust](#sandbox) in the
+Sandbox section).
 
 ```bash
 make help       # list every target, grouped by area (the targets live in make/*.mk)
@@ -461,9 +462,15 @@ include `extension-ci-tools`' makefiles), and every tracked `Cargo.toml`, `Cargo
 tracked file a host tool loads by its name alone: `conftest.py`, `pytest.ini`, `setup.cfg`,
 `tox.ini`, `noxfile.py`, `sitecustomize.py`, `usercustomize.py` and `.envrc`. The names make and
 pytest load from the root, `GNUmakefile`, `makefile` and `conftest.py`, are read-only when present;
-when absent, the run phase binds an empty read-only file over each, so the run cannot create one
-(while it runs, the checkout holds an empty file of each name, removed when the run ends). Every
-path git ignores is hidden: a directory behind an empty read-only mount, a file behind an empty
+when absent, the run phase binds an empty read-only file over each, so the run cannot create one.
+While the run lasts, the checkout holds a placeholder of each name, one line that says what it is,
+removed when the run ends. A runner killed before then (SIGKILL, an out-of-memory kill, a power
+loss) leaves them: a host `make` then stops with the placeholder's own line,
+`GNUmakefile:1: *** sandbox: a killed sandbox run left this placeholder GNUmakefile; ...`. Remove
+each root `GNUmakefile`, `makefile` or `conftest.py` that holds only such a line; or start the
+runner directly (`python3 -I tools/sandbox/sandbox.py`, below), which removes the placeholders
+that still hold their line, says so, and refuses when one was changed. Ctrl-C, SIGTERM and SIGHUP
+(a closed terminal) stop the runner cleanly and leave none. Every path git ignores is hidden: a directory behind an empty read-only mount, a file behind an empty
 read-only file, so a run cannot read a local `.env`. The sandbox's own outputs (`target/`,
 `.venv/`, Python caches, the built `_core*.so`) are the exception.
 
@@ -475,7 +482,7 @@ Python caches and the built extension from the checkout. It exits 3 when a file 
 path appeared outside those outputs, a path could not be read or an output could not be removed,
 whatever the command's status: read `git status` and `git diff` before running anything from the
 checkout. Otherwise it exits with the command's status (124 past the timeout, 130 on Ctrl-C, 143
-on SIGTERM, 2 when it refuses to start); Ctrl-C and SIGTERM kill the container and run the audit
+on SIGTERM, 129 on SIGHUP, 2 when it refuses to start); Ctrl-C, SIGTERM and SIGHUP kill the container and run the audit
 first.
 
 A new path that host tools look up by name comes first in the report, with a line that says not
@@ -600,7 +607,7 @@ it touches that could not be read), both lists, then `cargo_deny`, `pip_audit`, 
 `run` are `null` when that step did not run (a refusal before it), and `pip_audit` is `[]`.
 
 The exit status is that of `make sandbox` (the command's, 2 refused, 3 dirty audit, 124 timeout,
-130 and 143 on a signal), the fetch's when the fetch failed, and 4 when a confirmation was needed
+129, 130 and 143 on a signal), the fetch's when the fetch failed, and 4 when a confirmation was needed
 and not given. Every refusal is one line starting `sandbox-pr:`.
 
 `make sandbox-pr-check` proves it with a hostile change: in a temporary clone of your checkout, on
