@@ -16,6 +16,8 @@
   --version-bg: #2c4178;
   --glow-1: rgb(77 109 192 / 0.06);
   --glow-2: rgb(61 90 166 / 0.05);
+  --glass: rgb(255 255 255 / 0.62);
+  --glass-blur: 14px;
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --space-6: 6px;
   --space-8: 8px;
@@ -56,6 +58,7 @@
     --version-bg: #4868ae;
     --glow-1: rgb(122 154 232 / 0.10);
     --glow-2: rgb(72 104 174 / 0.10);
+    --glass: rgb(19 24 38 / 0.62);
     --shadow-card: 0 8px 24px rgb(0 0 0 / 0.28);
   }
 }
@@ -113,7 +116,15 @@ h2 { font-size: var(--text-lg); margin: 1.25rem 0 0.5rem; }
   line-height: 1.2;
 }
 #version:empty { display: none; }
-.privacy { margin: 4px 0 var(--space-12); color: var(--muted); font-size: var(--text-md); }
+.privacy {
+  display: inline-flex; align-items: flex-start; gap: var(--space-8); max-width: 100%;
+  margin: 4px 0 var(--space-12); padding: var(--space-6) var(--space-12);
+  border: var(--border); border-radius: var(--radius-pill);
+  background: var(--glass); backdrop-filter: blur(var(--glass-blur));
+  color: var(--muted); font-family: var(--mono); font-size: var(--text-sm); line-height: 1.2;
+}
+.privacy svg, .drop-title svg { display: block; flex: 0 0 auto; }
+.privacy svg { margin-top: calc((1.2em - 18px) / 2); }
 
 button, select, input[type="search"] {
   font: inherit;
@@ -135,7 +146,12 @@ button.link {
   text-decoration: underline; font-family: var(--mono); font-size: inherit;
 }
 
-.mask-toggle { display: flex; gap: var(--space-8); align-items: center; cursor: pointer; }
+.mask-toggle {
+  display: flex; gap: var(--space-8); align-items: center; max-width: 100%;
+  padding: var(--space-8) var(--space-12); border: var(--border); border-radius: var(--radius-lg);
+  background: var(--glass); backdrop-filter: blur(var(--glass-blur));
+  cursor: pointer;
+}
 .intake { display: flex; flex-wrap: wrap; gap: var(--space-12); align-items: stretch; }
 .drop {
   flex: 1 1 18rem;
@@ -151,7 +167,7 @@ button.link {
 .drop input {
   position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden;
 }
-.drop-title { font-weight: var(--weight-semibold); }
+.drop-title { display: inline-flex; align-items: center; gap: var(--space-8); font-weight: var(--weight-semibold); }
 
 .status { margin: var(--space-12) 0; font-weight: var(--weight-semibold); }
 .alert {
