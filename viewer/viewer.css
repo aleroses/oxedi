@@ -1,17 +1,18 @@
 :root {
   color-scheme: light dark;
-  --bg: #f7f7f5;
+  --bg: #f5f5f5;
   --panel: #ffffff;
-  --text: #1c1d1f;
-  --muted: #61666d;
-  --line: #d9dadd;
-  --accent: #1f5fbf;
+  --text: #1a1a1a;
+  --muted: #6b6b6b;
+  --line: #d8d8d8;
+  --accent: #3d5aa6;
   --accent-text: #ffffff;
-  --mark: #ffe58a;
-  --mark-line: #f2c200;
-  --row-odd: #f3f4f6;
+  --mark: hsla(220, 65%, 65%, 0.25);
+  --mark-line: var(--accent);
+  --row-odd: hsla(220, 65%, 65%, 0.12);
   --warn-bg: #fde8e8;
   --warn-text: #8a1c1c;
+  --gradient-accent: linear-gradient(135deg, #4d6dc0, #3d5aa6);
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --space-6: 6px;
   --space-8: 8px;
@@ -36,18 +37,19 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #15171a;
-    --panel: #1d2024;
-    --text: #e6e7e9;
-    --muted: #9ba1a9;
-    --line: #353a41;
-    --accent: #7fb0ff;
-    --accent-text: #0d1a2e;
-    --mark: #6b5a0f;
-    --mark-line: #b8970a;
-    --row-odd: #23272c;
+    --bg: #141414;
+    --panel: #1f1f1f;
+    --text: #e5e5e5;
+    --muted: #b5b5b5;
+    --line: #3d3d3d;
+    --accent: #7a9ae8;
+    --accent-text: #141414;
+    --mark: hsla(220, 65%, 65%, 0.25);
+    --mark-line: var(--accent);
+    --row-odd: hsla(220, 65%, 65%, 0.12);
     --warn-bg: #3a1f1f;
     --warn-text: #ffb4b4;
+    --gradient-accent: linear-gradient(135deg, #7a9ae8, #6b8fd8);
   }
 }
 
@@ -83,6 +85,11 @@ button, select, input[type="search"] {
 }
 button { cursor: pointer; }
 button:disabled { opacity: 0.5; cursor: default; }
+#sample {
+  background: var(--gradient-accent);
+  color: var(--accent-text);
+  border-color: transparent;
+}
 button.link {
   border: 0; background: none; padding: 0; color: var(--accent);
   text-decoration: underline; font-family: var(--mono); font-size: inherit;
@@ -160,7 +167,7 @@ button.link {
   position: sticky; left: 0; background: var(--panel);
 }
 .textview .line.current { background: var(--mark); }
-.textview .line.current .no { background: var(--mark); }
+.textview .line.current .no { background: var(--mark); color: var(--text); }
 .textview .line.path { color: var(--muted); padding-left: calc(5ch + 24px); background: var(--row-odd); font-style: italic; }
 .textview mark {
   background: var(--accent); color: var(--accent-text); border-radius: 2px;
