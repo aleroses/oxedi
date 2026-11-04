@@ -14,7 +14,8 @@ host home other than that storage reaches it. Two phases, each in its own contai
 After the run, an audit lists every file it changed, every new path it left and every path it
 cannot read, and removes the Python caches and the built extension it may have left in the
 checkout. A dirty audit is recorded in the checkout's storage, and the next start refuses while a
-path it named is still as the run left it.
+path it named is still as the run left it. One run of a checkout at a time: a second one is refused
+while the first holds the run lock of the checkout's storage (lock.py), and so is a clean of it.
 
 Run it isolated (`python3 -I`), as make does, so no file in the checkout or variable of the shell
 can shadow a module it imports.
@@ -39,6 +40,7 @@ import signal
 import sys
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
@@ -56,7 +58,8 @@ from lifecycle import (  # noqa: E402
     DaemonInfo, daemon_info, explain, image_labels, limits_from, refuse_if_running, run_container, running,
 )
 from hold import clear_leftovers, placeholders  # noqa: E402
-from storage import Storage, cache_root, clean, empty_dir, held_for, prepare, storage_for  # noqa: E402
+from lock import Busy, RunLock  # noqa: E402
+from storage import Storage, cache_root, clean, empty_dir, held_for, is_tree, own_dir, prepare, storage_for  # noqa: E402
 
 FETCH_BUDGET_S = 600
 # The Playwright version the viewer image's browser was installed for.
@@ -267,20 +270,49 @@ def sandbox(image: str, kind: ImageKind, checkout_dir: Path, env: dict[str, str]
     command = env.get("SANDBOX_CMD", "").strip()
     if not command:
         raise SandboxError('no command: set CMD, for example make sandbox CMD="make gates"')
-    plan = ready(image, kind, checkout_dir, env, checked_daemon())
-    status, findings = audited(plan, lambda: phases(plan, command))
+    # Taken before anything else, docker included, and held until the placeholders are gone and the
+    # audit is done: a second run of this checkout is refused before it touches either.
+    with RunLock(own_dir(cache_root(env), checkout_dir)):
+        plan = ready(image, kind, checkout_dir, env, checked_daemon())
+        status, findings = audited(plan, lambda: phases(plan, command))
     return DIRTY_STATUS if findings.dirty else status
 
 
+def run_locks(cache: Path, everything: bool, checkout_dir: Path) -> list[RunLock]:
+    """The run locks a clean must hold: this checkout's, or that of every storage under `cache`."""
+    if not everything:
+        return [RunLock(own_dir(cache, checkout_dir), create=False)]
+    owns = sorted(cache.iterdir()) if is_tree(cache) else []
+    return [RunLock(own, create=False) for own in owns if is_tree(own)]
+
+
+class CleanRefused(Exception):
+    """A sandbox run holds a lock the clean needs; the message is the whole refusal line."""
+
+
+def hold_runs(held: ExitStack, locks: list[RunLock], everything: bool) -> None:
+    """Takes every lock into `held`; refuses when a run holds one."""
+    for run_lock in locks:
+        try:
+            held.enter_context(run_lock)
+        except Busy as busy:
+            whose = f"a sandbox run that uses {run_lock.storage}" if everything else "a sandbox run of this checkout"
+            raise CleanRefused(f"sandbox-clean: {whose} is in progress ({busy.holder}); wait for it to end") from None
+
+
 def clean_storage(everything: bool, checkout_dir: Path, env: dict[str, str]) -> int:
-    """Removes this checkout's storage, or all of it, unless a sandbox container that uses it runs."""
+    """Removes this checkout's storage, or all of it, unless a sandbox run or a sandbox container
+    that uses it runs. The runs' locks are held until the storage is gone, so none starts meanwhile."""
     cache = cache_root(env)
     doomed = cache if everything else cache / path_hash(checkout_dir)
     pattern = "^oxedi-sandbox-" if everything else f"^{container_name(checkout_dir)}$"
-    busy = running(pattern) if shutil.which("docker") else []
-    if busy:
-        raise SandboxError(f"{', '.join(busy)} is running and uses {doomed}; wait for it or stop it with docker kill")
-    done = "removed" if clean(doomed) else "nothing to remove at"
+    with ExitStack() as held:
+        hold_runs(held, run_locks(cache, everything, checkout_dir), everything)
+        busy = running(pattern) if shutil.which("docker") else []
+        if busy:
+            raise SandboxError(
+                f"{', '.join(busy)} is running and uses {doomed}; wait for it or stop it with docker kill")
+        done = "removed" if clean(doomed) else "nothing to remove at"
     print(f"sandbox: {done} {doomed}", file=sys.stderr)
     return 0
 
@@ -305,6 +337,9 @@ def main(argv: list[str]) -> int:
         return sandbox(args.image, ImageKind(args.kind), args.checkout.resolve(), dict(os.environ))
     except SandboxError as error:
         print(f"sandbox: {error}", file=sys.stderr)
+        return 2
+    except CleanRefused as refused:
+        print(refused, file=sys.stderr)
         return 2
     except Stopped as stopped:
         print(f"sandbox: interrupted by {stopped}; the container, if it had started, was killed", file=sys.stderr)

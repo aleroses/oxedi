@@ -1,6 +1,6 @@
 """The sandbox's storage on the host: shared caches and each checkout's target/, venvs, the
-empty file bound over every ignored file, the stand-ins bound over the absent root names and the
-record of the last dirty audit."""
+empty file bound over every ignored file, the stand-ins bound over the absent root names, the
+record of the last dirty audit and the lock that lets one run of a checkout in at a time."""
 
 import os
 import shutil
@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from layout import STAND_INS, Checkout, SandboxError, path_hash, refuse_links, refuse_unsafe
+from lock import LOCK_NAME
 
 
 @dataclass(frozen=True)
@@ -77,11 +78,21 @@ def reviews(cache: Path) -> Path:
     return cache / "prs"
 
 
-def forget(cache: Path, review: Path) -> None:
-    """Removes a review directory and the storage of the clone it holds, so nothing of an earlier
-    run of the same change (a target/ above all) reaches the next one."""
-    clean(cache / path_hash(review / "checkout"))
+def renew(cache: Path, review: Path) -> None:
+    """Removes a review directory and all its clone's storage holds but the run lock, so nothing of
+    an earlier run of the same change (a target/ above all) reaches the next one, while the review
+    that holds that lock keeps it."""
+    own = own_dir(cache, review / "checkout")
+    entries = [entry for entry in own.iterdir() if entry.name != LOCK_NAME] if is_tree(own) else [own]
+    for entry in entries:
+        clean(entry)
     clean(review)
+
+
+def forget(cache: Path, review: Path) -> None:
+    """Removes a review directory and the whole storage of the clone it holds."""
+    renew(cache, review)
+    clean(own_dir(cache, review / "checkout"))
 
 
 def make_mount_point(root: Path, mount_point: str) -> None:
