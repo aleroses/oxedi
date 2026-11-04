@@ -19,7 +19,7 @@
 //! `tables`, `balance` and `summaries` hold the definitions,
 //! `occurrence_error`, `table_error`, `balance_error` and `summary_error` why
 //! an occurrence, a table, a balancing rule or a summary is rejected; `raw`
-//! the deserialization shapes; `sections` the JSON shape as data and `shape`
+//! the deserialization shapes; `schema` the columns of each table, known from the spec alone; `sections` the JSON shape as data and `shape`
 //! the walk that checks a value against it; `build` the construction of a
 //! [`Spec`] as a pipeline of steps, `build_loops` the compilation of one loop,
 //! `compile` that of the tables and `columns` that of one table column;
@@ -46,6 +46,7 @@ mod patch;
 mod phi;
 mod raw;
 mod render;
+mod schema;
 mod sections;
 mod segments;
 mod shape;
@@ -53,6 +54,8 @@ mod summaries;
 mod summary_error;
 mod table_error;
 mod tables;
+#[cfg(test)]
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
 mod version;
@@ -66,6 +69,7 @@ pub use occurrence_error::OccurrenceError;
 pub use occurrences::{OccurrenceDef, Qualifier, Usage};
 pub use patch::merge_patch;
 pub use phi::ColumnKind;
+pub use schema::{ColumnSchema, TableSchema, spec_schema, table_columns, table_schema};
 pub use segments::{ElementDef, ElementDefError, ROW_COLUMN, SEGMENT_COLUMN, SegmentDef};
 pub use summaries::Summary;
 pub use summary_error::SummaryDefError;
@@ -75,6 +79,7 @@ pub use version::{DeclaredVersion, VersionError};
 
 pub(crate) use balance::render_terms;
 pub(crate) use render::{render_key, render_selector, render_trigger};
+pub(crate) use schema::column_type;
 pub(crate) use segments::rejects_code;
 
 use std::cmp::Reverse;

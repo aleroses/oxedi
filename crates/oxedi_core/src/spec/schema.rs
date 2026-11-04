@@ -2,8 +2,7 @@
 //! types and the tables their reference columns point at, known from the
 //! spec alone.
 
-use super::plan::column_type;
-use crate::spec::{ROW_COLUMN, SEGMENT_COLUMN, Spec, TableDef};
+use super::{ColumnKind, ColumnSource, ROW_COLUMN, SEGMENT_COLUMN, Spec, TableDef};
 use crate::value::ColumnType;
 
 /// One column of a projected table.
@@ -26,6 +25,15 @@ pub struct TableSchema {
     pub name: String,
     /// Every column, in order.
     pub columns: Vec<ColumnSchema>,
+}
+
+/// The column type of a declared column: its element's type, `Int64` for a
+/// segment index, `Binary` for an element the spec does not define.
+pub(crate) fn column_type(spec: &Spec, table: &TableDef, source: &ColumnSource) -> ColumnType {
+    match spec.column_kind(table, source) {
+        ColumnKind::SegmentIndex => ColumnType::Int64 { scale: 0 },
+        ColumnKind::Element(kind) => ColumnType::of(kind),
+    }
 }
 
 /// The schema of one table of `spec`: the row number, the anchor segment's

@@ -173,7 +173,7 @@ The same concept, named in each binding. The Rust files are under `crates/oxedi_
 | Read in batches (`Processor::feed`) | `oxedi.stream(data, by='transaction')` (`stream.rs`) | one file at a time (`scan/`) | — |
 | Choose the spec (`Builtin::select`, `Builtin::find`) | `Spec.builtin("4010")`, `Spec.from_json`, `Spec.patch` (`spec.rs`) | `version := '4010'` (`builtins/`, `BuiltinTable`) | by the file's declared version |
 | Tables (`Tables`, `Table`) | `Result.tables`, `Table.to_polars()` (`tables.rs`, `arrow.rs`) | the rows of `table_name` (`scan/`, `types/`) | `View.tables` (`TableView`, `ColumnView`) |
-| Table schema (`spec_schema`) | `Spec.schema()` | `oxedi_schema()` (`oxedi_schema/`) | — |
+| Table schema (`spec_schema`, `spec/schema.rs`) | `Spec.schema()` | `oxedi_schema()` (`oxedi_schema/`) | — |
 | Diagnostics (`Diagnostic`) | `Result.diagnostics`, `Diagnostic.kind`, `.rule`, `.datum` (`diagnostic.rs`, reading `Diagnostic::flat`) | `table_name := 'diagnostics'` (`diagnostics/`) | `View.diagnostics` (`DiagnosticView`) |
 | Segments (`Document`, `Segment`) | `Result.document[i]`, `Segment.element(position, component)`, `Segment.has(...)` over `Segment::component` (`document.rs`) | — | `View.segments` (`SegmentView`) |
 | Summaries (`summarize`, `Spec::summaries`) | `Result.count_claims()`, `count_patients()`, `sum_payments()`, `.payer`, `.payee` (`native.rs`) | — | — |
