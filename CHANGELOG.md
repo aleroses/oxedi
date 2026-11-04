@@ -23,6 +23,8 @@ This file covers the Python package; the DuckDB extension has its own changelog 
   no such place.
 
 ### Changed
+- The `pyx12` extra now requires pyx12 below 4.0.1, because 4.0.1 reports findings in a shape
+  `oxedi.pyx12` does not read yet.
 - `oxedi.pyx12.validate` indexes the file and selects the spec without projecting the tables, so it
   is faster; its findings are unchanged.
 - A spec patch that removes a table or column a summary reads must also remove the summary (with

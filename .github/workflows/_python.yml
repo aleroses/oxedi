@@ -29,7 +29,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache-suffix: python
       - name: Tools
-        run: uv pip install "maturin>=1.9.4,<2" --group crates/oxedi_py/pyproject.toml:test "pyx12>=4.0,<5" mypy pandas-stubs pyarrow-stubs
+        run: uv pip install "maturin>=1.9.4,<2" --group crates/oxedi_py/pyproject.toml:test "pyx12>=4.0,<4.0.1" mypy pandas-stubs pyarrow-stubs
       - name: Build
         run: maturin develop --uv --release --manifest-path crates/oxedi_py/Cargo.toml
       - name: Spec against pyx12's maps

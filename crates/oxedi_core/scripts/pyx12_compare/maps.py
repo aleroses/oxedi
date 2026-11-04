@@ -172,4 +172,4 @@ def pyx12_maps():
 
         return Path(str(files("pyx12") / "map"))
     except ModuleNotFoundError:
-        sys.exit("pyx12 is not installed: pip install 'pyx12>=4.0,<5'")
+        sys.exit("pyx12 is not installed: pip install 'pyx12>=4.0,<4.0.1'")
