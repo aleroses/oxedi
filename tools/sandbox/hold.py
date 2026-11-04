@@ -22,16 +22,18 @@ from pathlib import Path
 from layout import SandboxError
 
 MAKE_BODY = (
-    "$(error sandbox: a killed sandbox run left this placeholder {name}; remove it, and any GNUmakefile, "
-    "makefile or conftest.py at the root that holds only such a line, then retry)\n"
+    "$(error sandbox: a sandbox run of this checkout holds this placeholder {name} while it runs; "
+    "if none is running, a killed run left it: remove it, and any GNUmakefile, makefile or conftest.py "
+    "at the root that holds only such a line, then retry)\n"
 )
 # What the host finds in each held name until the run is over.
 BODIES = {
     "GNUmakefile": MAKE_BODY.format(name="GNUmakefile"),
     "makefile": MAKE_BODY.format(name="makefile"),
     "conftest.py": (
-        "# sandbox: a killed sandbox run left this placeholder conftest.py; remove it, and any GNUmakefile, "
-        "makefile or conftest.py at the root that holds only such a line, then retry\n"
+        "# sandbox: a sandbox run of this checkout holds this placeholder conftest.py while it runs; "
+        "if none is running, a killed run left it: remove it, and any GNUmakefile, makefile or conftest.py "
+        "at the root that holds only such a line, then retry\n"
     ),
 }
 

@@ -1,6 +1,8 @@
 """Tests of rust_version.py: every way rust-toolchain.toml can fail to name a version ends in one
-`sandbox-image:` line, never a traceback."""
+`sandbox-image:` line and exit status 2, never a traceback."""
 
+import contextlib
+import io
 import shutil
 import sys
 import tempfile
@@ -18,9 +20,9 @@ class ChannelTest(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(self.root))
 
     def refusal(self) -> str:
-        with self.assertRaises(SystemExit) as caught:
+        with self.assertRaises(rust_version.Refused) as caught:
             rust_version.channel(self.root)
-        return str(caught.exception.code)
+        return str(caught.exception)
 
     def write(self, text: str) -> None:
         (self.root / "rust-toolchain.toml").write_text(text, encoding="utf-8")
@@ -51,6 +53,13 @@ class ChannelTest(unittest.TestCase):
             self.refusal(),
             "sandbox-image: rust-toolchain.toml names no exact channel X.Y.Z (found '199'); "
             "set channel to a version such as 1.99.0")
+
+    def test_main_prints_the_line_to_stderr_and_exits_2(self):
+        self.write('[toolchain]\nchannel = "stable"\n')
+        with self.assertRaises(SystemExit) as caught, contextlib.redirect_stderr(io.StringIO()) as err:
+            rust_version.main(["--root", str(self.root)])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertTrue(err.getvalue().startswith("sandbox-image: rust-toolchain.toml names no exact channel"))
 
 
 if __name__ == "__main__":

@@ -58,7 +58,7 @@ class SandboxError(Exception):
 @dataclass(frozen=True)
 class Checkout:
     """A checkout, the paths bound read-only over it, the directories masked, the files hidden and
-    the absent root names the run phase holds with an empty read-only file (relative,
+    the absent root names the run phase holds with a read-only stand-in (`STAND_INS`) (relative,
     `/`-separated)."""
 
     root: Path

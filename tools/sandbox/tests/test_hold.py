@@ -36,8 +36,9 @@ class Placeholders(unittest.TestCase):
     def test_the_make_body_names_the_cause(self):
         self.assertEqual(
             hold.BODIES["GNUmakefile"],
-            "$(error sandbox: a killed sandbox run left this placeholder GNUmakefile; remove it, and any GNUmakefile, "
-            "makefile or conftest.py at the root that holds only such a line, then retry)\n")
+            "$(error sandbox: a sandbox run of this checkout holds this placeholder GNUmakefile while it runs; "
+            "if none is running, a killed run left it: remove it, and any GNUmakefile, makefile or conftest.py "
+            "at the root that holds only such a line, then retry)\n")
 
     def test_a_name_that_appeared_is_refused(self):
         (self.root / "makefile").write_text("all:\n")
@@ -141,9 +142,9 @@ class KilledRun(World):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertEqual(
                     result.stderr,
-                    "GNUmakefile:1: *** sandbox: a killed sandbox run left this placeholder GNUmakefile; remove it, "
-                    "and any GNUmakefile, makefile or conftest.py at the root that holds only such a line, then "
-                    "retry.  Stop.\n")
+                    "GNUmakefile:1: *** sandbox: a sandbox run of this checkout holds this placeholder GNUmakefile "
+                    "while it runs; if none is running, a killed run left it: remove it, and any GNUmakefile, "
+                    "makefile or conftest.py at the root that holds only such a line, then retry.  Stop.\n")
 
 
 if __name__ == "__main__":

@@ -86,7 +86,6 @@ def install_stop_handlers() -> None:
             signal.signal(signum, stop)
 
 
-
 @dataclass(frozen=True)
 class Plan:
     """Everything a phase's `docker run` is built from."""

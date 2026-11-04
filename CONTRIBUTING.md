@@ -465,9 +465,10 @@ pytest load from the root, `GNUmakefile`, `makefile` and `conftest.py`, are read
 when absent, the run phase binds a read-only stand-in over each, so the run cannot create one; the
 stand-ins of the two make names include the next name, so make in the run still reads `Makefile`.
 While the run lasts, the checkout holds a placeholder of each name, one line that says what it is,
-removed when the run ends. A runner killed before then (SIGKILL, an out-of-memory kill, a power
+removed when the run ends; host `make` in that checkout stops with that line meanwhile, so use
+another worktree until the run ends. A runner killed before then (SIGKILL, an out-of-memory kill, a power
 loss) leaves them: a host `make` then stops with the placeholder's own line,
-`GNUmakefile:1: *** sandbox: a killed sandbox run left this placeholder GNUmakefile; ...`. Remove
+`GNUmakefile:1: *** sandbox: a sandbox run of this checkout holds this placeholder GNUmakefile while it runs; if none is running, a killed run left it: ...`. Remove
 each root `GNUmakefile`, `makefile` or `conftest.py` that holds only such a line; or start the
 runner directly (`python3 -I tools/sandbox/sandbox.py`, below), which removes the placeholders
 that still hold their line, says so, and refuses when one was changed. Ctrl-C, SIGTERM and SIGHUP
