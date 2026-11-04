@@ -183,7 +183,8 @@ button.link {
   grid-column: 1 / -1;
   flex: none;
   position: relative;
-  display: flex; flex-direction: column; gap: 2px; justify-content: center;
+  display: flex; flex-direction: column; gap: 2px; justify-content: center; align-items: center;
+  text-align: center;
   min-height: 10rem; padding: var(--space-16);
   border: 2px dashed var(--line); border-radius: var(--radius-lg); background: var(--panel);
   box-shadow: var(--shadow-card, none);
@@ -200,7 +201,16 @@ main:has(#results:not([hidden])) .drop {
 .drop input {
   position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden;
 }
-.drop-title { display: inline-flex; align-items: center; gap: var(--space-8); font-weight: var(--weight-semibold); }
+.drop-title {
+  display: flex; flex-direction: column; align-items: stretch; gap: var(--space-8);
+  align-self: stretch; max-width: 100%;
+  font-size: var(--text-xl); font-weight: var(--weight-semibold);
+}
+.drop-title svg { align-self: center; width: 28px; height: 28px; margin: 0; }
+.drop > .muted { align-self: stretch; max-width: 100%; font-size: var(--text-lg); }
+main:has(#results:not([hidden])) .drop-title { gap: 2px; font-size: inherit; }
+main:has(#results:not([hidden])) .drop-title svg { width: 18px; height: 18px; }
+main:has(#results:not([hidden])) .drop > .muted { font-size: inherit; }
 #mask-note { grid-column: 1 / -1; }
 
 .status { margin: var(--space-12) 0; font-weight: var(--weight-semibold); }
