@@ -40,6 +40,18 @@ SANDBOX_REFUSAL_invalid = printf "%s: IMAGE must be base or viewer, not '%s'\n" 
 define SANDBOX_REFUSE
 $(SANDBOX_REFUSAL_$(SANDBOX_KIND)) $(if $(filter base viewer,$(SANDBOX_KIND)),true)
 endef
+# Refuses, with exit 2 and before any docker command, the first variable of $(2) that is set
+# but not on the command line, so a variable left in the shell never reaches the runner. $(1) is
+# the target; each variable shows its own example.
+SANDBOX_EXAMPLE_CMD     = CMD="make gates"
+SANDBOX_EXAMPLE_PR      = PR=251
+SANDBOX_EXAMPLE_REF     = REF=feature
+SANDBOX_EXAMPLE_HEAD    = HEAD=1
+SANDBOX_EXAMPLE_TARGET  = TARGET="make py-test"
+SANDBOX_EXAMPLE_CONFIRM = CONFIRM=yes
+define SANDBOX_REFUSE_VARS
+$(foreach v,$(2),$(if $(findstring command line,$(origin $(v))),,$(if $(filter undefined,$(origin $(v))),,printf '%s\n' '$(1): $(v) is read from the command line only; pass it as make $(1) $(SANDBOX_EXAMPLE_$(v))' >&2; exit 2;)))
+endef
 # The image of the run, built first when missing (sandbox-image or sandbox-image-viewer).
 define SANDBOX_ENSURE_IMAGE
 test -n "$(SANDBOX_RUN_IMAGE)" || exit 1; \
@@ -74,18 +86,20 @@ sandbox-image-viewer: ## build the viewer sandbox image (Node, Chromium, wasm to
 sandbox: export SANDBOX_CMD := $(CMD)
 sandbox sandbox-pr sandbox-check: export SANDBOX_IMAGE_VALUE := $(IMAGE)
 sandbox: ## run CMD over this checkout in a hardened container with no network (make sandbox CMD="make gates" [IMAGE=viewer])
+	@$(call SANDBOX_REFUSE_VARS,sandbox,CMD) true
 	@$(call SANDBOX_REFUSE,sandbox)
 	@$(SANDBOX_ENSURE_IMAGE)
 	@$(SANDBOX_PY) $(SANDBOX_DIR)/sandbox.py --image $(SANDBOX_RUN_IMAGE) --kind $(SANDBOX_KIND) --checkout $(CURDIR)
 
 # The change, the target and the confirmation reach sandbox_pr.py as SANDBOX_* variables, like CMD
-# for sandbox. The rules (sandbox_pr.py, risk.py, deny.toml) are this checkout's, never the change's.
+# for sandbox. The rules (sandbox_pr.py, risk.py, deps.py, report.py, deny.toml) are this checkout's, never the change's.
 sandbox-pr: export SANDBOX_PR := $(PR)
 sandbox-pr: export SANDBOX_REF := $(REF)
 sandbox-pr: export SANDBOX_HEAD := $(HEAD)
 sandbox-pr: export SANDBOX_TARGET := $(TARGET)
 sandbox-pr: export SANDBOX_CONFIRM := $(CONFIRM)
 sandbox-pr: ## test a pull request (PR=N [HEAD=1]) or a ref (REF=<name>) in the sandbox, after a risk report [TARGET="..."] [CONFIRM=yes] [IMAGE=viewer]
+	@$(call SANDBOX_REFUSE_VARS,sandbox-pr,PR REF HEAD TARGET CONFIRM) true
 	@$(call SANDBOX_REFUSE,sandbox-pr)
 	@$(SANDBOX_ENSURE_IMAGE)
 	@$(SANDBOX_PY) $(SANDBOX_DIR)/sandbox_pr.py --image $(SANDBOX_RUN_IMAGE) --kind $(SANDBOX_KIND) --checkout $(CURDIR)

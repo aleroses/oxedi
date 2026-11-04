@@ -405,12 +405,32 @@ class Flow(unittest.TestCase):
         for args, line in ((["PR=12a"], 'sandbox-pr: PR must be a pull request number, 1 to 999999999, got "12a"'),
                            (["PR=7", "CONFIRM=y"], 'sandbox-pr: CONFIRM must be yes or unset, got "y"'),
                            (["PR=7", "HEAD=2"], 'sandbox-pr: HEAD must be 1 or unset, got "2"'),
-                           (["REF=-x"], 'sandbox-pr: REF must not start with "-", got "-x"')):
+                           (["REF=-x"], 'sandbox-pr: REF must not start with "-", got "-x"'),
+                           (["REF=-x", "TARGET=make py-test"], 'sandbox-pr: REF must not start with "-", got "-x"')):
             with self.subTest(args=args):
                 result = subprocess.run(["make", "--no-print-directory", "-C", str(checkout), "sandbox-pr", *args],
                                         env=self.env(SANDBOX_REF=""), capture_output=True, text=True, timeout=120)
                 self.assertEqual(result.stderr.splitlines()[0], line)
         self.assertEqual(self.runs(), [])
+
+    def test_variables_are_read_from_the_command_line_only(self):
+        checkout = make_repo_copy(self.tmp / "copy")
+        cases = (
+            ("sandbox", "CMD", 'CMD="make gates"', []),
+            ("sandbox-pr", "PR", "PR=251", []),
+            ("sandbox-pr", "REF", "REF=feature", []),
+            ("sandbox-pr", "HEAD", "HEAD=1", []),
+            ("sandbox-pr", "TARGET", 'TARGET="make py-test"', []),
+            ("sandbox-pr", "CONFIRM", "CONFIRM=yes", []),
+        )
+        for target, name, example, args in cases:
+            with self.subTest(variable=name):
+                result = subprocess.run(["make", "--no-print-directory", "-C", str(checkout), target, *args],
+                                        env=self.env(**{name: "1"}), capture_output=True, text=True, timeout=120)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(result.stderr.splitlines()[0],
+                                 f"{target}: {name} is read from the command line only; pass it as make {target} {example}")
+                self.assertEqual(self.runs(), [])
 
     def test_every_git_of_the_process_is_isolated(self):
         environ = {"GIT_DIR": "/elsewhere", "GIT_CONFIG_GLOBAL": "/home/x/.gitconfig", "PATH": "/bin"}
