@@ -47,8 +47,9 @@ class Kind(Enum):
 MANIFEST_NAMES = frozenset({"Cargo.toml", "Cargo.lock", "pyproject.toml", "uv.toml", ".python-version"})
 MANIFEST_PATTERNS = ("requirements*.txt", "rust-toolchain*")
 SCRIPT_PATTERNS = ("*.sh", "*.py", "*.mjs", "*.js")
-# The crates' own sources, the Python package's modules included: library code, not scripts.
-LIBRARY_SOURCES = ("crates/*/src/*", "crates/*/python/*")
+# The crates' own sources, the Python package's modules included: library code, not scripts. They
+# are the directories right under crates/<crate>/; a src or python folder deeper down is not.
+LIBRARY_FOLDERS = frozenset({"src", "python"})
 TEST_HOOK_NAMES = frozenset({"conftest.py", "pytest.ini", "setup.cfg", "tox.ini"})
 SYMLINK_MODE, SUBMODULE_MODE = "120000", "160000"
 
@@ -78,12 +79,19 @@ def matches(text: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch(text, pattern) for pattern in patterns)
 
 
+def is_library_source(parts: tuple[str, ...]) -> bool:
+    """A file under crates/<crate>/src or crates/<crate>/python, at that depth only."""
+    return len(parts) > 3 and parts[0] == "crates" and parts[2] in LIBRARY_FOLDERS
+
+
 def is_script(path: str) -> bool:
-    return matches(PurePosixPath(path).name, SCRIPT_PATTERNS) and not matches(path, LIBRARY_SOURCES)
+    pure = PurePosixPath(path)
+    return matches(pure.name, SCRIPT_PATTERNS) and not is_library_source(pure.parts)
 
 
 def is_run_docs(path: str) -> bool:
-    return path == "README.md" or (path.startswith("docs/") and path.endswith(".md"))
+    parts = PurePosixPath(path).parts
+    return parts == ("README.md",) or (len(parts) > 1 and parts[0] == "docs" and path.endswith(".md"))
 
 
 def is_host_executed(path: str) -> bool:

@@ -102,6 +102,23 @@ class Kinds(Repo):
         self.assertEqual(statuses["crates/oxedi_core/src/value/parse.rs"], "M")
         self.assertEqual(statuses["crates/oxedi_core/build.rs"], "A")
 
+    def test_nested_src_is_script(self):
+        for path in ("tools/crates/x/src/evil.py", "crates/x/y/src/evil.py", "crates/x/y/python/evil.sh",
+                     "docs/crates/x/src/evil.js", "crates/src/evil.py", "crates/x/evil.py"):
+            with self.subTest(path=path):
+                self.assertIs(risk.is_script(path), True)
+        for path in ("crates/oxedi_core/src/lib.py", "crates/oxedi_py/python/oxedi/__init__.py",
+                     "crates/oxedi_core/src/value/deep/x.sh"):
+            with self.subTest(path=path):
+                self.assertIs(risk.is_script(path), False)
+
+    def test_run_docs_are_the_root_readme_and_docs_markdown(self):
+        for path, expected in (("README.md", True), ("docs/a.md", True), ("docs/python/b.md", True),
+                               ("docs/a.txt", False), ("crates/oxedi_py/README.md", False),
+                               ("x/docs/a.md", False), ("docsx/a.md", False)):
+            with self.subTest(path=path):
+                self.assertIs(risk.is_run_docs(path), expected)
+
     def test_the_change_attributes_cannot_hide_a_binary(self):
         base = self.commit({"a.txt": "a\n"})
         head = self.commit({"x.bin": b"\0\1\2\3", ".gitattributes": "*.bin diff\n"})
