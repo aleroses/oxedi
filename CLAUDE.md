@@ -45,6 +45,9 @@ Rules for every change and refactor, checked by implementers and reviewers alike
   worktree, share one `CARGO_TARGET_DIR` so only what changed is rebuilt.
 - An open issue a change touches is fixed or fulfilled and closed by that change
   (`Closes #N`), never left out of date.
+- A PR changes at most 400 lines: additions plus deletions, tests included, generated goldens
+  and stubs excluded. A larger change is split into PRs that each merge on their own with their
+  own gate, and its plan says so before any code is written.
 - A PR body is in English with two sections, **Intent** and **Verification**; never list the
   diff content; no attribution lines. The maintainer merges.
 
