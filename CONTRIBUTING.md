@@ -186,7 +186,9 @@ ids, claim numbers, service dates). Instead:
 
 ## Pull requests
 
-- Branch from `master`; keep one change per pull request.
+- Branch from `master`. A pull request holds one change and at most 400 changed lines (additions
+  plus deletions, tests included, generated goldens and stubs excluded); split a larger change into
+  pull requests that each stand on their own.
 - The body has two sections. **Intent**: what the change is for and why. **Verification**: how
   you checked it (the commands you ran, a golden diff you read). Do not list the diff; reviewers
   read it.
