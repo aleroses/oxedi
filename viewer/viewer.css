@@ -220,11 +220,16 @@ main:has(#results:not([hidden])) .drop > .muted { font-size: inherit; }
   overflow-wrap: anywhere;
 }
 
-.tabs { display: flex; overflow-x: auto; gap: 2px; margin-top: var(--space-16); border-bottom: var(--border); }
+.tabs { display: flex; overflow-x: auto; gap: var(--space-8); margin-top: var(--space-16); border-bottom: var(--border); }
 .tabs button {
-  flex: 0 0 auto; border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none;
+  flex: 0 0 auto; border: 0; border-radius: 0; background: none;
 }
-.tabs button[aria-selected="true"] { border-bottom-color: var(--accent); font-weight: var(--weight-semibold); }
+.tabs button[aria-selected="true"] {
+  border-radius: var(--radius-pill);
+  background: var(--gradient-accent); color: var(--accent-text);
+  font-weight: var(--weight-semibold);
+}
+.tabs button[aria-selected="true"] .badge { color: var(--text); }
 .badge {
   display: inline-block; min-width: 1.5em; padding: 0 var(--space-6); border-radius: var(--radius-pill);
   background: var(--line); font-size: var(--text-xs); text-align: center;
