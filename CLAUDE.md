@@ -14,8 +14,6 @@ them exactly as written there. `ARCHITECTURE.md` is the public map of the code.
 
 Agent-specific additions:
 
-- "Comments describe the code, not its history" also excludes stage numbers, the
-  maintainers' internal codes (such as N1 or P10) and links to planning notes.
 - Open an issue before adding any dependency, as `CONTRIBUTING.md` says; the maintainer
   approves each one before it is added.
 
@@ -45,8 +43,10 @@ Rules for every change and refactor, checked by implementers and reviewers alike
   worktree, share one `CARGO_TARGET_DIR` so only what changed is rebuilt.
 - An open issue a change touches is fixed or fulfilled and closed by that change
   (`Closes #N`), never left out of date.
-- A PR body is in English with two sections, **Intent** and **Verification**; never list the
-  diff content; no attribution lines. The maintainer merges.
+- A PR changes at most 400 lines (additions plus deletions, tests included, generated goldens
+  and stubs excluded); a larger change is planned as several PRs, each merging on its own with
+  its own gate. Its body is in English with two sections, **Intent** and **Verification**; never
+  list the diff content; no attribution lines. The maintainer merges.
 
 ## Maintainer workflow
 

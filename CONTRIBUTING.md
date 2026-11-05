@@ -102,8 +102,10 @@ and `sha2`. Nothing that does I/O, uses threads or needs a runtime. Open an issu
 any dependency to the core. The Python binding holds the only `pyo3` and `arrow-*`
 dependencies, and every binding delegates the work to the core.
 
-**Comments describe the code, not its history.** Comments and doc comments say what the code
-does and why. No ticket or planning references, no "added in", no internal codes. From
+**Comments explain the implementation, nothing else.** Comments and doc comments say what the
+code does and why (an invariant, a non-obvious offset, the reason for a choice), or hold a `TODO`
+that names the work left. No history ("added in", "used to"), no reference to an issue, a pull
+request, a review finding or a plan, no internal codes, and no pointer to a Markdown document. From
 `crates/oxedi_core/src/process/mod.rs`:
 
 ```rust
@@ -186,7 +188,9 @@ ids, claim numbers, service dates). Instead:
 
 ## Pull requests
 
-- Branch from `master`; keep one change per pull request.
+- Branch from `master`. A pull request holds one change and at most 400 changed lines (additions
+  plus deletions, tests included, generated goldens and stubs excluded); split a larger change into
+  pull requests that each stand on their own.
 - The body has two sections. **Intent**: what the change is for and why. **Verification**: how
   you checked it (the commands you ran, a golden diff you read). Do not list the diff; reviewers
   read it.
