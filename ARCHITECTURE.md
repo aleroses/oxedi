@@ -201,7 +201,9 @@ The full list, with an example of each, is in
   bindings and the viewer name no 835 segment; the spec JSON holds the structure.
 - **The core stays sans-IO.** No file, network, thread or runtime in `oxedi_core`, and no new
   dependency without discussing it first.
-- **Comments describe the code, not its history.**
+- **Comments explain the implementation, nothing else.** What the code does and why, or a
+  `TODO` that names the work left; no history and no pointer to an issue, a pull request, a
+  review finding, a plan or a Markdown document.
 - **A rename moves the map too.** A change that renames a public core item or moves a module
   updates this file and `crates/oxedi_core/tests/public_paths.rs` in the same commit.
 
