@@ -1,0 +1,23 @@
+.facts,
+.card dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-10) var(--space-16);
+  margin: 0;
+}
+.field dt { color: var(--muted); font-size: var(--text-xs); }
+.field dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+.field dd.missing { color: var(--muted); }
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: var(--space-12);
+}
+.card {
+  background: var(--panel);
+  border: var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-12) var(--space-16);
+  box-shadow: var(--shadow-card, none);
+}
+.card dl { grid-template-columns: 1fr; }
