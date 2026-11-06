@@ -2,6 +2,7 @@
 @import url("css/brand.css");
 @import url("css/privacy.css");
 @import url("css/intake.css");
+@import url("css/tabs.css");
 
 :root {
   color-scheme: light dark;
@@ -28,6 +29,7 @@
   --space-8: 8px;
   --space-12: 12px;
   --space-16: 16px;
+  --text-xs: 0.8rem;
   --text-sm: 0.85rem;
   --text-lg: 1rem;
   --text-xl: 1.15rem;
@@ -116,16 +118,6 @@ button.link {
   margin: 12px 0; padding: 10px 14px; border-radius: 8px;
   background: var(--warn-bg); color: var(--warn-text); border: 1px solid currentColor;
   overflow-wrap: anywhere;
-}
-
-.tabs { display: flex; overflow-x: auto; gap: 2px; margin-top: 16px; border-bottom: 1px solid var(--line); }
-.tabs button {
-  flex: 0 0 auto; border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none;
-}
-.tabs button[aria-selected="true"] { border-bottom-color: var(--accent); font-weight: 600; }
-.badge {
-  display: inline-block; min-width: 1.5em; padding: 0 6px; border-radius: 999px;
-  background: var(--line); font-size: 0.8rem; text-align: center;
 }
 
 [role="tabpanel"] { padding: 12px 0 32px; }
