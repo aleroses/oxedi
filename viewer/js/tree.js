@@ -1,6 +1,7 @@
 // The Loops tab: the loop tree as nested <details>, children built on first open.
 
 import { el } from './dom.js';
+import { linkButton } from './ui/link-button.js';
 
 const MAX_IDS = 16;
 
@@ -25,8 +26,8 @@ export function createTree(root, { onJump }) {
       const ids = el('span', 'ids');
       ids.append(' ');
       for (const s of segments.slice(0, MAX_IDS)) {
-        const button = el('button', 'link', view.segments[s].id);
-        button.type = 'button';
+        const button = linkButton();
+        button.textContent = view.segments[s].id;
         button.title = `Segment ${s}`;
         button.addEventListener('click', (event) => {
           // A click on the id must not fold or unfold the node.

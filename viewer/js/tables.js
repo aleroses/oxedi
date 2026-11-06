@@ -2,6 +2,7 @@
 
 import { createVirtualList } from './virtual.js';
 import { el } from './dom.js';
+import { linkButton } from './ui/link-button.js';
 
 const ROW_HEIGHT = 28;
 const CELL_WIDTH = 176;
@@ -72,8 +73,8 @@ export function createTables(root, { onJump }) {
       td.textContent = '—';
       td.title = 'null';
     } else if (column === segmentColumn && value !== '') {
-      const button = el('button', 'link', value);
-      button.type = 'button';
+      const button = linkButton();
+      button.textContent = value;
       button.dataset.segment = value;
       button.title = 'Show in Text';
       td.append(button);
