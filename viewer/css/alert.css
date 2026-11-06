@@ -1,0 +1,10 @@
+.status { margin: var(--space-12) 0; font-weight: var(--weight-semibold); }
+.alert {
+  margin: var(--space-12) 0;
+  padding: var(--space-10) 14px;
+  border-radius: var(--radius-md);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border: 1px solid currentColor;
+  overflow-wrap: anywhere;
+}
