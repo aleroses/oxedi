@@ -1,0 +1,10 @@
+.diag-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  margin-bottom: var(--space-10);
+}
+.diag-tools button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-text);
+}
