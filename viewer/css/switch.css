@@ -1,0 +1,25 @@
+#mask {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 20px;
+  margin: 0;
+  border: var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--line);
+  cursor: pointer;
+}
+#mask::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+#mask:checked { background: var(--accent); }
+#mask:checked::before { background: var(--accent-text); transform: translateX(18px); }

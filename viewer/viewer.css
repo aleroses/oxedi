@@ -1,3 +1,5 @@
+@import url("css/switch.css");
+
 :root {
   color-scheme: light dark;
   --bg: #f5f5f5;
@@ -14,6 +16,8 @@
   --warn-text: #8a1c1c;
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --focus-ring: 3px solid var(--accent);
+  --radius-pill: 999px;
+  --border: 1px solid var(--line);
   --glow-1: rgb(77 109 192 / 0.06);
   --glow-2: rgb(61 90 166 / 0.05);
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
