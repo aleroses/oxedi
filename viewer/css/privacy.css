@@ -21,13 +21,6 @@
 }
 .privacy svg { margin-top: calc((1.2em - 18px) / 2); }
 
-.drop-title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-8);
-  font-weight: var(--weight-semibold);
-}
-
 .mask-toggle {
   display: flex;
   gap: var(--space-8);
