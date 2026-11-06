@@ -1,4 +1,5 @@
 @import url("css/switch.css");
+@import url("css/brand.css");
 
 :root {
   color-scheme: light dark;
@@ -18,6 +19,14 @@
   --focus-ring: 3px solid var(--accent);
   --radius-pill: 999px;
   --border: 1px solid var(--line);
+  --gradient-accent: linear-gradient(135deg, #4d6dc0, #3d5aa6);
+  --version-bg: #2c4178;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --text-sm: 0.85rem;
+  --text-xl: 1.15rem;
+  --weight-semibold: 600;
   --glow-1: rgb(77 109 192 / 0.06);
   --glow-2: rgb(61 90 166 / 0.05);
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
@@ -37,6 +46,8 @@
     --row-odd: hsla(220, 65%, 65%, 0.12);
     --warn-bg: #3a1f1f;
     --warn-text: #ffb4b4;
+    --gradient-accent: linear-gradient(135deg, #7a9ae8, #6b8fd8);
+    --version-bg: #4868ae;
     --glow-1: rgb(122 154 232 / 0.10);
     --glow-2: rgb(72 104 174 / 0.10);
   }
@@ -65,7 +76,6 @@ body::before {
 }
 
 a { color: var(--accent); }
-h1 { font-size: 1.15rem; margin: 0; }
 h2 { font-size: 1rem; margin: 1.25rem 0 0.5rem; }
 .muted { color: var(--muted); }
 [hidden] { display: none !important; }
@@ -74,7 +84,6 @@ h2 { font-size: 1rem; margin: 1.25rem 0 0.5rem; }
 
 .top, main { max-width: 80rem; margin: 0 auto; padding: 0 16px; }
 .top { padding-top: 12px; }
-.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
 .privacy { margin: 4px 0 12px; color: var(--muted); font-size: 0.9rem; }
 
 button, select, input[type="search"] {
