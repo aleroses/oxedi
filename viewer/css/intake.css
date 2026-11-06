@@ -1,0 +1,86 @@
+.intake {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-16);
+  align-items: stretch;
+  padding: var(--space-16);
+  border: var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--glass);
+  backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-card, none);
+}
+
+#sample {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  background: var(--gradient-accent);
+  color: var(--accent-text);
+  border-color: transparent;
+  transition: background 200ms ease;
+}
+#sample:hover:not(:disabled) { background: var(--gradient-accent-hover); }
+
+.mask-toggle { width: 100%; }
+#mask-note { grid-column: 1 / -1; }
+
+.drop {
+  grid-column: 1 / -1;
+  flex: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  min-height: 10rem;
+  padding: var(--space-16);
+  border: 2px dashed var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-card, none);
+  cursor: pointer;
+  transition: background 200ms ease, border-color 200ms ease;
+}
+main:has(#results:not([hidden])) .drop {
+  min-height: 5rem;
+  padding: var(--space-12) var(--space-16);
+}
+.drop.over,
+.drop:hover { border-color: var(--accent); }
+.drop:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.drop:focus-within { outline: var(--focus-ring); outline-offset: 2px; }
+.drop input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.drop-title {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-8);
+  align-self: stretch;
+  max-width: 100%;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+}
+.drop-title svg { align-self: center; width: 28px; height: 28px; margin: 0; }
+.drop > .muted { align-self: stretch; max-width: 100%; font-size: var(--text-lg); }
+main:has(#results:not([hidden])) .drop-title { gap: 2px; font-size: inherit; }
+main:has(#results:not([hidden])) .drop-title svg { width: 18px; height: 18px; }
+main:has(#results:not([hidden])) .drop > .muted { font-size: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  .drop, #sample { transition: none; }
+}
+@media (max-width: 640px) {
+  .intake { grid-template-columns: 1fr; }
+  #sample, .mask-toggle { grid-column: 1 / -1; }
+}
