@@ -3,9 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::carry::Carried;
-use crate::spec::{
-    ColumnKind, ColumnSource, ElementDef, OccurrenceDef, Pick, Qualifier, Spec, TableDef,
-};
+use crate::spec::{ColumnSource, ElementDef, OccurrenceDef, Pick, Qualifier, Spec, TableDef};
 use crate::value::ColumnType;
 
 /// One defined element, with what checking it needs worked out once.
@@ -280,14 +278,5 @@ impl<'s> Plans<'s> {
             Some(key) => self.short.entry(key).or_insert_with(empty),
             None => self.long.entry(id.to_vec()).or_insert_with(empty),
         }
-    }
-}
-
-/// The column type of a declared column: its element's type, `Int64` for a
-/// segment index, `Binary` for an element the spec does not define.
-pub(super) fn column_type(spec: &Spec, table: &TableDef, source: &ColumnSource) -> ColumnType {
-    match spec.column_kind(table, source) {
-        ColumnKind::SegmentIndex => ColumnType::Int64 { scale: 0 },
-        ColumnKind::Element(kind) => ColumnType::of(kind),
     }
 }

@@ -19,7 +19,7 @@ use arrow_array::types::{
 };
 use arrow_array::{Array, ArrowPrimitiveType, RecordBatch, RecordBatchReader};
 use arrow_schema::{DataType, TimeUnit};
-use oxedi_core::project::table_columns;
+use oxedi_core::spec::table_columns;
 use oxedi_core::value::{
     TimeUnit as Unit, date_from_midnight, date_from_millis, integer_from_f64, integer_from_u128,
     rescale, seconds_from,

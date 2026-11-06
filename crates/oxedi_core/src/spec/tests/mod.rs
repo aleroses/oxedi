@@ -10,6 +10,7 @@ mod loading;
 mod occurrences;
 mod patch;
 mod phi;
+mod schema;
 mod segments;
 mod shape;
 mod summaries;

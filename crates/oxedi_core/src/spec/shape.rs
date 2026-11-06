@@ -2,7 +2,7 @@
 //!
 //! The shape is data: every object the schema defines is an [`ObjectSchema`],
 //! a table of its keys and the [`Field`] each holds (the tables are in
-//! `schema`), and one walk checks a value against it. The root is such a
+//! `sections`), and one walk checks a value against it. The root is such a
 //! table too, one row per section of the spec, so a section is checked by
 //! looking up its key.
 
@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::error::SpecError;
 use super::render::{child, render_value};
-use super::schema::ROOT;
+use super::sections::ROOT;
 
 /// The members of the object at `key`, in key order; empty when there is none.
 pub(super) fn section<'v>(value: &'v Value, key: &str) -> BTreeMap<&'v str, &'v Value> {

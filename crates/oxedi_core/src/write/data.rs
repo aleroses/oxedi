@@ -2,8 +2,7 @@
 //! by name and checked against the types the spec gives them.
 
 use crate::column::{Cell, ColumnData, Tables};
-use crate::project::table_columns;
-use crate::spec::{ROW_COLUMN, SEGMENT_COLUMN, Spec};
+use crate::spec::{ROW_COLUMN, SEGMENT_COLUMN, Spec, table_columns};
 use crate::value::ColumnType;
 
 use super::finding::WriteError;

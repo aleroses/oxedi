@@ -54,8 +54,7 @@
 //! module notes of `mask.rs` say how.
 //!
 //! The module is split by responsibility: `plan` holds the per-table plans
-//! built from the spec; `schema` the columns of each table, known from the
-//! spec alone; `check` the element check and the parsed values it
+//! built from the spec; `check` the element check and the parsed values it
 //! hands to the columns; `fill` the row filling, the diagnostic helpers and
 //! the text read of an element; `carry` the values read from loops above a
 //! table's anchor; `mask` the masking of rows and datums; `quote` the
@@ -71,7 +70,6 @@ mod mask;
 mod mask_tests;
 mod plan;
 mod quote;
-mod schema;
 #[cfg(test)]
 mod schema_tests;
 #[cfg(test)]
@@ -88,14 +86,13 @@ use crate::diagnostic::Diagnostic;
 use crate::engine::Event;
 use crate::mask::Mask;
 use crate::segment::Segment;
-use crate::spec::{LoopId, OccurrenceDef, Spec};
+use crate::spec::{LoopId, OccurrenceDef, Spec, column_type, table_columns};
 use crate::value::ColumnType;
 
 use carry::Carried;
 use check::Checked;
 use fill::append;
-use plan::{Candidate, ElementPlan, Plans, column_type};
-pub use schema::{ColumnSchema, TableSchema, spec_schema, table_columns, table_schema};
+use plan::{Candidate, ElementPlan, Plans};
 pub use unknown::UnknownTable;
 
 /// A column value of a row being collected.
