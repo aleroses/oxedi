@@ -1,6 +1,7 @@
 // The Diagnostics tab: findings grouped by level, each linked to its segment.
 
 import { el } from './dom.js';
+import { diagnosticRow } from './ui/diagnostic-row.js';
 
 const LEVELS = ['SNIP 1', 'SNIP 2', 'SNIP 3'];
 const PAGE = 200;
@@ -17,27 +18,6 @@ export function createDiagnostics(root, { onJump }) {
   tools.setAttribute('aria-label', 'Filter by level');
   const body = el('div');
   root.append(tools, body);
-
-  function pathText(path) {
-    return path.map(([name, ordinal]) => `${name} #${ordinal}`).join(' › ');
-  }
-
-  function item(d) {
-    const li = el('li', 'diag');
-    const head = el('div');
-    head.append(el('span', 'level', d.level));
-    if (d.segment !== null) {
-      const jump = el('button', 'jump', `segment ${d.segment}`);
-      jump.type = 'button';
-      jump.addEventListener('click', () => onJump(d.segment, d.element ?? undefined, d.component ?? undefined));
-      head.append(jump);
-    } else {
-      head.append(el('span', 'muted', 'end of file'));
-    }
-    li.append(head, el('div', 'text', d.text));
-    if (d.path.length) li.append(el('div', 'path', pathText(d.path)));
-    return li;
-  }
 
   function renderList() {
     body.textContent = '';
@@ -56,7 +36,7 @@ export function createDiagnostics(root, { onJump }) {
     const more = el('button', null);
     more.type = 'button';
     const fill = () => {
-      for (const d of shown.slice(next, next + PAGE)) list.append(item(d));
+      for (const d of shown.slice(next, next + PAGE)) list.append(diagnosticRow(d, onJump));
       next = Math.min(shown.length, next + PAGE);
       more.hidden = next >= shown.length;
       more.textContent = `Show more (${shown.length - next} left)`;

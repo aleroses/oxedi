@@ -5,6 +5,7 @@
 @import url("css/tabs.css");
 @import url("css/alert.css");
 @import url("css/summary.css");
+@import url("css/diagnostic.css");
 
 :root {
   color-scheme: light dark;
@@ -38,6 +39,7 @@
   --text-lg: 1rem;
   --text-xl: 1.15rem;
   --weight-semibold: 600;
+  --weight-bold: 700;
   --radius-lg: 10px;
   --glass: rgb(255 255 255 / 0.62);
   --glass-blur: 14px;
@@ -156,15 +158,6 @@ button.link {
 
 .diag-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .diag-tools button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
-.diag-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.diag {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
-}
-.diag .level { font-weight: 700; margin-right: 8px; }
-.diag .path { color: var(--muted); font-family: var(--mono); font-size: 0.85rem; }
-.diag .text { margin: 4px 0; font-family: var(--mono); font-size: 0.85rem; overflow-wrap: anywhere; }
-.diag button.jump { text-decoration: underline; color: var(--accent); border: 0; background: none; padding: 0; }
-
 .tree, .tree ul { list-style: none; margin: 0; padding-left: 18px; }
 .tree { padding-left: 0; font-family: var(--mono); font-size: 0.85rem; }
 .tree summary { cursor: pointer; padding: 2px 0; overflow-wrap: anywhere; }
