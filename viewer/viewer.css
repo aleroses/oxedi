@@ -1,5 +1,6 @@
 @import url("css/switch.css");
 @import url("css/brand.css");
+@import url("css/privacy.css");
 
 :root {
   color-scheme: light dark;
@@ -27,6 +28,9 @@
   --text-sm: 0.85rem;
   --text-xl: 1.15rem;
   --weight-semibold: 600;
+  --radius-lg: 10px;
+  --glass: rgb(255 255 255 / 0.62);
+  --glass-blur: 14px;
   --glow-1: rgb(77 109 192 / 0.06);
   --glow-2: rgb(61 90 166 / 0.05);
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
@@ -48,6 +52,7 @@
     --warn-text: #ffb4b4;
     --gradient-accent: linear-gradient(135deg, #7a9ae8, #6b8fd8);
     --version-bg: #4868ae;
+    --glass: rgb(19 24 38 / 0.62);
     --glow-1: rgb(122 154 232 / 0.10);
     --glow-2: rgb(72 104 174 / 0.10);
   }
@@ -84,7 +89,6 @@ h2 { font-size: 1rem; margin: 1.25rem 0 0.5rem; }
 
 .top, main { max-width: 80rem; margin: 0 auto; padding: 0 16px; }
 .top { padding-top: 12px; }
-.privacy { margin: 4px 0 12px; color: var(--muted); font-size: 0.9rem; }
 
 button, select, input[type="search"] {
   font: inherit;
@@ -101,7 +105,6 @@ button.link {
   text-decoration: underline; font-family: var(--mono); font-size: inherit;
 }
 
-.mask-toggle { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .intake { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; }
 .drop {
   flex: 1 1 18rem;
@@ -116,7 +119,6 @@ button.link {
 .drop input {
   position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden;
 }
-.drop-title { font-weight: 600; }
 
 .status { margin: 12px 0; font-weight: 600; }
 .alert {

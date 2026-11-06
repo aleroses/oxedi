@@ -1,0 +1,42 @@
+.privacy {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  max-width: 100%;
+  margin: 4px 0 var(--space-12);
+  padding: var(--space-6) var(--space-12);
+  border: var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--glass);
+  backdrop-filter: blur(var(--glass-blur));
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--text-sm);
+  line-height: 1.2;
+}
+.privacy svg,
+.drop-title svg {
+  display: block;
+  flex: 0 0 auto;
+}
+.privacy svg { margin-top: calc((1.2em - 18px) / 2); }
+
+.drop-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-weight: var(--weight-semibold);
+}
+
+.mask-toggle {
+  display: flex;
+  gap: var(--space-8);
+  align-items: center;
+  max-width: 100%;
+  padding: var(--space-8) var(--space-12);
+  border: var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--glass);
+  backdrop-filter: blur(var(--glass-blur));
+  cursor: pointer;
+}
